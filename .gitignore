@@ -1,0 +1,31 @@
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# ===== Empaquetado (PyInstaller / flet pack) =====
+build/
+dist/
+*.spec
+
+# ===== Datos en runtime (se generan/actualizan; no van al repo) =====
+tesoreria.db
+*.db
+_cuentas_cache.json
+
+# ===== Modelos de OCR (pesados; se obtienen aparte) =====
+tessdata/
+
+# ===== Datos sensibles y archivos de ejemplo (NO subir: datos reales) =====
+# Estados de cuenta / carátulas con nombres y CLABE de personas
+CARATULAS/
+# Excel con las cuentas bancarias de las empresas
+Cuentas bancarias/
+# Archivos TXT de ejemplo (contienen CLABE/nombres reales)
+Archivos TXT/
+ALTABANREGIO 1.xls
+Codigo macro excel
+dispersion_prueba.txt
+reporte_devoluciones.xlsx

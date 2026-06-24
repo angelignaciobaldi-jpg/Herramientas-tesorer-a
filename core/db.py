@@ -10,8 +10,9 @@ import os
 import sqlite3
 from dataclasses import dataclass
 
-_DIR_BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-RUTA_DB = os.path.join(_DIR_BASE, "tesoreria.db")
+from . import rutas
+
+RUTA_DB = os.path.join(rutas.DATOS, "tesoreria.db")
 
 
 @dataclass

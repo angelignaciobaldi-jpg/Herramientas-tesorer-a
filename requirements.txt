@@ -1,0 +1,13 @@
+# Herramienta Integral de Tesorería — dependencias
+# (sqlite3 viene incluido con Python; no se lista)
+flet>=0.85         # interfaz de escritorio (Material)
+PyMuPDF>=1.24      # lectura y rasterizado de PDF (módulo 'fitz')
+pytesseract>=0.3.10  # conector al motor Tesseract (binario aparte)
+Pillow>=10.0       # manejo de imágenes para el OCR
+openpyxl>=3.1      # lectura del Excel de cuentas / reporte de devoluciones
+xlwt>=1.3          # generación del archivo .xls de alta para Banregio
+
+# Requisito externo (no es paquete de Python):
+#   Tesseract OCR  -> https://github.com/UB-Mannheim/tesseract/wiki
+#   Instalado en:  C:\Program Files\Tesseract-OCR\tesseract.exe
+#   Idioma español (opcional, mejora nombres con acentos/ñ): paquete 'spa'
