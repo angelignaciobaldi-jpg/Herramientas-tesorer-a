@@ -13,9 +13,10 @@ echo [2/3] Verificando dependencias...
 python -m pip install -r requirements.txt --quiet --disable-pip-version-check
 echo.
 echo [3/3] Iniciando la aplicacion...
-python app.py
+echo   (esta ventana se cierra sola si la app abre correctamente)
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$log = Join-Path $env:TEMP 'tesoreria_error.log'; if (Test-Path $log) { Remove-Item $log -Force }; $p = Start-Process pythonw -ArgumentList 'app.py' -WorkingDirectory (Get-Location).Path -PassThru -RedirectStandardError $log; Start-Sleep -Seconds 7; if ($p.HasExited -and $p.ExitCode -ne 0) { Write-Host ''; Write-Host '*** La aplicacion no pudo iniciar. Detalle del error: ***' -ForegroundColor Red; if (Test-Path $log) { Get-Content $log }; exit 1 } else { exit 0 }"
 if errorlevel 1 (
   echo.
-  echo La aplicacion termino con un error. Revisa el mensaje de arriba.
+  echo Copia el error de arriba si necesitas reportarlo.
   pause
 )
