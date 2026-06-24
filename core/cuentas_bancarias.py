@@ -19,13 +19,13 @@ try:
 except ImportError:  # openpyxl es opcional; sin él, el catálogo queda vacío.
     openpyxl = None
 
-RUTA_EXCEL = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    "Cuentas bancarias", "CUENTAS BANCARIAS .xlsx",
-)
+from . import rutas
+
+# El Excel lo actualiza el usuario, así que va junto al .exe (no empaquetado).
+RUTA_EXCEL = os.path.join(rutas.DATOS, "Cuentas bancarias", "CUENTAS BANCARIAS .xlsx")
 # Copia en caché del catálogo. Permite seguir trabajando aunque el Excel esté
 # abierto (Excel lo bloquea exclusivamente) usando la última lectura válida.
-_RUTA_CACHE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_cuentas_cache.json")
+_RUTA_CACHE = os.path.join(rutas.DATOS, "_cuentas_cache.json")
 
 # Banco elegido en la interfaz -> nombre del banco tal como aparece en el Excel.
 BANCO_UI_A_EXCEL = {

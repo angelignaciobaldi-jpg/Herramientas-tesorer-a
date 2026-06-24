@@ -57,7 +57,8 @@ for _ruta in _RUTAS_TESSERACT:
 # Carpeta de modelos de idioma incluida con el proyecto (no requiere permisos
 # de administrador). Contiene spa+eng+osd; se prioriza sobre la de Tesseract
 # para que el OCR pueda usar español sin tocar 'C:\Program Files'.
-_TESSDATA_PROYECTO = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tessdata")
+from . import rutas
+_TESSDATA_PROYECTO = os.path.join(rutas.BUNDLE, "tessdata")
 if os.path.isdir(_TESSDATA_PROYECTO):
     os.environ["TESSDATA_PREFIX"] = _TESSDATA_PROYECTO
 
