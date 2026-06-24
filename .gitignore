@@ -9,6 +9,8 @@ venv/
 build/
 dist/
 *.spec
+# Paquete generado para compartir (preparar_paquete.bat)
+Tesoreria-paquete/
 
 # ===== Datos en runtime (se generan/actualizan; no van al repo) =====
 tesoreria.db
