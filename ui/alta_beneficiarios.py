@@ -21,8 +21,9 @@ from ui.comun import (
     tarjeta, validar,
 )
 
-# Fondo rojo tenue para las filas que no coinciden con el reporte de cuentas.
-SIN_COINCIDENCIA = ft.Colors.with_opacity(0.16, ft.Colors.RED)
+# Fondos de fila según la conciliación con el reporte de cuentas.
+SIN_COINCIDENCIA = ft.Colors.with_opacity(0.16, ft.Colors.RED)      # no coincide
+SUGERIDO_NOMBRE = ft.Colors.with_opacity(0.18, ft.Colors.AMBER)     # CLABE sugerida por nombre
 
 
 class FilaBeneficiario:
@@ -35,9 +36,12 @@ class FilaBeneficiario:
         self.id = id_          # None mientras no se haya guardado en la base
         self.origen = origen   # nombre del archivo de origen (informativo)
         self.ruta_archivo = ruta_archivo  # ruta completa para previsualizar
-        # Conciliación con el reporte de cuentas: None = no aplica (sin reporte
-        # importado), True = la CLABE coincide, False = no coincide (fila roja).
-        self.conciliacion: bool | None = None
+        # Estado de conciliación con el reporte de cuentas:
+        #   None     -> no aplica (sin reporte importado)
+        #   "ok"     -> la CLABE coincide con el reporte
+        #   "nombre" -> CLABE sugerida porque el nombre coincide (fila ámbar)
+        #   "sin"    -> no coincide ni por CLABE ni por nombre (fila roja)
+        self.conciliacion: str | None = None
 
         self.tf_clabe = ft.TextField(
             value=clabe, dense=True, width=W_CLABE, max_length=18, text_size=12,
@@ -184,9 +188,14 @@ class FilaBeneficiario:
         return True
 
     # ------------------------------------------------------- conciliación
-    def aplicar_reporte(self, rep: reporte_cuentas.CuentaReporte) -> None:
+    def aplicar_reporte(self, rep: reporte_cuentas.CuentaReporte,
+                        incluir_clabe: bool = False) -> None:
         """Complementa el registro con los datos del reporte (fuente autorizada):
-        toma el nombre del beneficiario y el correo cuando la CLABE coincide."""
+        toma el nombre del beneficiario y el correo. Con incluir_clabe también
+        rellena la CLABE (cuando la coincidencia fue por nombre)."""
+        if incluir_clabe and rep.clabe:
+            self.tf_clabe.value = rep.clabe
+            self.txt_banco.value = banco_desde_clabe(rep.clabe) or "—"
         if rep.beneficiario:
             self.tf_benef.value = rep.beneficiario
             self.tf_alias.value = rep.beneficiario
@@ -194,11 +203,16 @@ class FilaBeneficiario:
             self.tf_email.value = rep.correo
         self._actualizar_estado()
 
-    def marcar_conciliacion(self, estado: bool | None) -> None:
-        """Pinta la fila según la conciliación: rojo si no coincide con el
-        reporte; sin color si coincide o si no hay reporte importado."""
+    def marcar_conciliacion(self, estado: str | None) -> None:
+        """Pinta la fila según la conciliación: rojo si no coincide; ámbar si la
+        CLABE se sugirió por nombre (revisar); sin color si coincide por CLABE o
+        si no hay reporte importado."""
         self.conciliacion = estado
-        self.fila.color = SIN_COINCIDENCIA if estado is False else None
+        self.fila.color = (
+            SIN_COINCIDENCIA if estado == "sin"
+            else SUGERIDO_NOMBRE if estado == "nombre"
+            else None
+        )
 
     def previsualizar(self) -> None:
         """Abre el archivo original del registro en el visor predeterminado del
@@ -395,19 +409,25 @@ class SeccionAltaBeneficiarios:
             )
             for ico, color, txt in items
         ]
-        # Muestra de la fila roja (sin coincidencia en el reporte de cuentas).
-        chip_rojo = ft.Row(
-            [
-                ft.Container(width=16, height=16, bgcolor=SIN_COINCIDENCIA,
-                             border=ft.Border.all(1, ROJO), border_radius=3),
-                ft.Text("Fila en rojo: sin coincidencia en el reporte", size=12, color=GRIS),
-            ],
-            spacing=5,
-            tight=True,
-        )
+        # Muestras de las filas coloreadas por la conciliación con el reporte.
+        def swatch(color, borde, texto):
+            return ft.Row(
+                [
+                    ft.Container(width=16, height=16, bgcolor=color,
+                                 border=ft.Border.all(1, borde), border_radius=3),
+                    ft.Text(texto, size=12, color=GRIS),
+                ],
+                spacing=5,
+                tight=True,
+            )
+
+        chip_ambar = swatch(SUGERIDO_NOMBRE, NARANJA,
+                            "Fila ámbar: CLABE sugerida por nombre (verifica)")
+        chip_rojo = swatch(SIN_COINCIDENCIA, ROJO,
+                          "Fila en rojo: sin coincidencia en el reporte")
         return ft.Row(
             [ft.Text("Leyenda:", size=12, weight=ft.FontWeight.BOLD, color=GRIS),
-             *chips, chip_rojo],
+             *chips, chip_ambar, chip_rojo],
             spacing=18,
             wrap=True,
             vertical_alignment=ft.CrossAxisAlignment.CENTER,
@@ -462,44 +482,60 @@ class SeccionAltaBeneficiarios:
         self.page.update()
 
     def _conciliar(self) -> None:
-        """Concilia TODAS las filas con el reporte: complementa nombre/correo de
-        las que coinciden por CLABE y marca en rojo las que no. Solo actúa si hay
-        un reporte importado (es decir, si el usuario subió ambos archivos)."""
+        """Concilia TODAS las filas con el reporte. Primero por CLABE; si no hay
+        CLABE o no coincide, intenta por nombre del beneficiario y, si encuentra
+        una coincidencia clara, sugiere su CLABE (fila ámbar para revisar). Las
+        que no coinciden de ninguna forma se marcan en rojo. Solo actúa si hay un
+        reporte importado (es decir, si el usuario subió ambos archivos)."""
         if not self.catalogo_reporte:
             return
-        conciliados = sin_match = 0
+        por_clabe = por_nombre = sin_match = 0
         for f in self.filas:
             clabe = solo_digitos(f.tf_clabe.value)
             rep = self.catalogo_reporte.get(clabe) if len(clabe) == 18 else None
             if rep:
                 f.aplicar_reporte(rep)
-                f.marcar_conciliacion(True)
-                conciliados += 1
+                f.marcar_conciliacion("ok")
+                por_clabe += 1
+                continue
+            rep_n = reporte_cuentas.buscar_por_nombre(self.catalogo_reporte, f.tf_benef.value)
+            if rep_n:
+                f.aplicar_reporte(rep_n, incluir_clabe=True)
+                f.marcar_conciliacion("nombre")
+                por_nombre += 1
             elif len(clabe) == 18:
-                f.marcar_conciliacion(False)
+                f.marcar_conciliacion("sin")
                 sin_match += 1
             else:
                 f.marcar_conciliacion(None)  # CLABE incompleta: el ícono ya avisa
         self.txt_estado_rep.value = (
-            f"Reporte '{self.nombre_reporte}': {conciliados} conciliado(s), "
-            f"{sin_match} sin coincidencia (marcado en rojo)."
+            f"Reporte '{self.nombre_reporte}': {por_clabe} por CLABE, "
+            f"{por_nombre} por nombre (CLABE sugerida, revisa en ámbar), "
+            f"{sin_match} sin coincidencia (en rojo)."
         )
 
     def _remarcar_conciliacion(self) -> None:
         """Refresca SOLO el color de las filas (sin reescribir datos), para
-        mantener el marcado tras redibujar la tabla."""
+        mantener el marcado tras redibujar la tabla. Conserva el aviso ámbar de
+        las filas cuya CLABE se sugirió por nombre."""
         for f in self.filas:
             if not self.catalogo_reporte:
                 f.marcar_conciliacion(None)
                 continue
+            if f.conciliacion == "nombre":
+                f.marcar_conciliacion("nombre")  # preserva el aviso de revisión
+                continue
             clabe = solo_digitos(f.tf_clabe.value)
             if len(clabe) != 18:
                 f.marcar_conciliacion(None)
+            elif clabe in self.catalogo_reporte:
+                f.marcar_conciliacion("ok")
             else:
-                f.marcar_conciliacion(clabe in self.catalogo_reporte)
+                f.marcar_conciliacion("sin")
 
     def _conciliar_una(self, fila: FilaBeneficiario) -> None:
-        """Concilia una sola fila (al editar su CLABE en vivo)."""
+        """Concilia una sola fila por CLABE (al editar su CLABE en vivo). No
+        sugiere CLABE por nombre aquí para no pisar lo que el usuario escribe."""
         if not self.catalogo_reporte:
             fila.marcar_conciliacion(None)
             return
@@ -510,9 +546,9 @@ class SeccionAltaBeneficiarios:
         rep = self.catalogo_reporte.get(clabe)
         if rep:
             fila.aplicar_reporte(rep)
-            fila.marcar_conciliacion(True)
+            fila.marcar_conciliacion("ok")
         else:
-            fila.marcar_conciliacion(False)
+            fila.marcar_conciliacion("sin")
 
     def _cambio_formato_export(self, _e=None) -> None:
         """Ajusta el botón de exportar según el formato/banco elegido."""

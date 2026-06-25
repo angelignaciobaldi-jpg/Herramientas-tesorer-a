@@ -14,9 +14,17 @@ y 'Cuenta' en lugar de asumir una posición fija.
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass
 
 import openpyxl
+
+# Palabras que no distinguen a un beneficiario (sufijos legales, artículos) y
+# que se ignoran al comparar nombres para conciliar por nombre.
+_RUIDO_NOMBRE = {
+    "SA", "SAB", "SC", "RL", "CV", "DE", "DEL", "LA", "LAS", "LOS", "EL", "Y",
+    "E", "I", "S", "A", "B", "C", "V", "COMPANY", "CIA", "GRUPO",
+}
 
 
 @dataclass
@@ -87,3 +95,43 @@ def leer(ruta: str) -> dict[str, CuentaReporte]:
             correo=campo(fila, "correo"),
         )
     return catalogo
+
+
+# --- Conciliación por nombre --------------------------------------------
+def _tokens_nombre(nombre: str) -> set[str]:
+    """Normaliza un nombre a un conjunto de palabras significativas (sin acentos,
+    mayúsculas, sin puntuación ni sufijos legales). El orden no importa, de modo
+    que 'JORGE MONTERO GAZCON' y 'Montero Gazcon Jorge' den el mismo conjunto."""
+    s = unicodedata.normalize("NFKD", nombre or "").encode("ascii", "ignore").decode()
+    s = re.sub(r"[^A-Za-z0-9 ]", " ", s).upper()
+    return {t for t in s.split() if len(t) > 1 and t not in _RUIDO_NOMBRE}
+
+
+def buscar_por_nombre(catalogo: dict[str, CuentaReporte], nombre: str) -> CuentaReporte | None:
+    """Busca en el reporte una cuenta cuyo nombre coincida con `nombre`.
+
+    Compara por conjunto de palabras (independiente del orden) y exige una
+    coincidencia fuerte (al menos 2 palabras en común y 80% de cobertura del
+    nombre más corto). Devuelve None si no hay coincidencia clara o si hay
+    empate entre cuentas distintas (para no adivinar)."""
+    objetivo = _tokens_nombre(nombre)
+    if len(objetivo) < 2:
+        return None
+    puntajes: dict[str, tuple[float, CuentaReporte]] = {}
+    for cuenta in catalogo.values():
+        mejor = 0.0
+        for variante in (cuenta.beneficiario, cuenta.descripcion):
+            toks = _tokens_nombre(variante)
+            comunes = objetivo & toks
+            if len(toks) < 2 or len(comunes) < 2:
+                continue
+            mejor = max(mejor, len(comunes) / min(len(objetivo), len(toks)))
+        if mejor > 0:
+            puntajes[cuenta.clabe] = (mejor, cuenta)
+    if not puntajes:
+        return None
+    tope = max(s for s, _ in puntajes.values())
+    if tope < 0.8:
+        return None
+    ganadores = [c for s, c in puntajes.values() if s == tope]
+    return ganadores[0] if len(ganadores) == 1 else None
