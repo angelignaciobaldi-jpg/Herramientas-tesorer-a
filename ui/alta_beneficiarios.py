@@ -795,19 +795,31 @@ class SeccionAltaBeneficiarios:
 
     async def _exportar_alta_bancomer(self, guardados) -> None:
         """Genera la carpeta 'CUENTAS PARA ALTA BANCOMER - dd-mm-aaaa' con los
-        TXT de alta de cuentas, separando las cuentas Bancomer (código 012) de
-        las de otros bancos (el alta del portal Bancomer es solo para las 012)."""
+        TXT de alta de cuentas, separados por banco (Bancomer 012 vs otros) y,
+        dentro de cada uno, por correo (con vs sin). El alta del portal Bancomer
+        aplica solo a las cuentas 012; las que no tienen correo se separan para
+        capturarlo antes de subirlas."""
         validos = [b for b in guardados if validar_clabe(b.clabe)]
         if not validos:
             self.avisar("No hay registros con CLABE válida para exportar.", ROJO)
             return
-        bancomer = [
-            (b.clabe, b.beneficiario, b.email or "")
-            for b in validos if b.clabe[:3] == "012"
-        ]
-        otros = [
-            (b.clabe, b.beneficiario, b.email or "")
-            for b in validos if b.clabe[:3] != "012"
+
+        def es_bancomer(b) -> bool:
+            return b.clabe[:3] == "012"
+
+        def tiene_correo(b) -> bool:
+            return bool((b.email or "").strip())
+
+        # (nombre de archivo, filtro, etiqueta para el resumen)
+        grupos = [
+            ("Cuentas Bancomer con correo.txt",
+             lambda b: es_bancomer(b) and tiene_correo(b), "Bancomer con correo"),
+            ("Cuentas Bancomer sin correo.txt",
+             lambda b: es_bancomer(b) and not tiene_correo(b), "Bancomer sin correo"),
+            ("Cuentas otros bancos con correo.txt",
+             lambda b: not es_bancomer(b) and tiene_correo(b), "otros bancos con correo"),
+            ("Cuentas otros bancos sin correo.txt",
+             lambda b: not es_bancomer(b) and not tiene_correo(b), "otros bancos sin correo"),
         ]
 
         destino = await self.picker.get_directory_path(
@@ -822,16 +834,17 @@ class SeccionAltaBeneficiarios:
         try:
             os.makedirs(carpeta, exist_ok=True)
             resumen: list[str] = []
-            if bancomer:
-                with open(os.path.join(carpeta, "Cuentas Bancomer.txt"),
+            for nombre_archivo, filtro, etiqueta in grupos:
+                sub = [
+                    (b.clabe, b.beneficiario, b.email or "")
+                    for b in validos if filtro(b)
+                ]
+                if not sub:
+                    continue
+                with open(os.path.join(carpeta, nombre_archivo),
                           "w", encoding="latin-1", newline="") as fh:
-                    fh.write(exportador_alta_bancomer.generar_txt(bancomer))
-                resumen.append(f"{len(bancomer)} Bancomer")
-            if otros:
-                with open(os.path.join(carpeta, "Cuentas otros bancos.txt"),
-                          "w", encoding="latin-1", newline="") as fh:
-                    fh.write(exportador_alta_bancomer.generar_txt(otros))
-                resumen.append(f"{len(otros)} de otros bancos")
+                    fh.write(exportador_alta_bancomer.generar_txt(sub))
+                resumen.append(f"{len(sub)} {etiqueta}")
         except Exception as exc:  # noqa: BLE001 — se reporta al usuario
             self.avisar(f"No se pudo generar la carpeta: {exc}", ROJO)
             return
