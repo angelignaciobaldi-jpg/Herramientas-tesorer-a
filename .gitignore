@@ -25,6 +25,9 @@ tessdata/
 CARATULAS/
 # Excel con las cuentas bancarias de las empresas
 Cuentas bancarias/
+# Reporte de cuentas para conciliar (CLABE/nombres/correos reales de proveedores)
+Reporte Cuentas Bancarias.xlsx
+Reporte*.xlsx
 # Archivos TXT de ejemplo (contienen CLABE/nombres reales)
 Archivos TXT/
 ALTABANREGIO 1.xls

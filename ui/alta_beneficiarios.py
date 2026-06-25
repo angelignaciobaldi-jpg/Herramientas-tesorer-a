@@ -11,7 +11,7 @@ import os
 
 import flet as ft
 
-from core import db, exportador, exportador_alta_banregio, ocr
+from core import db, exportador, exportador_alta_banregio, ocr, reporte_cuentas
 from core.catalogo_bancos import banco_desde_clabe
 from core.extractores import extraer_datos, nombre_desde_archivo, validar_clabe
 from ui.comun import (
@@ -20,6 +20,9 @@ from ui.comun import (
     celda_centrada, encabezado_col, fmt_monto, parse_monto, solo_digitos,
     tarjeta, validar,
 )
+
+# Fondo rojo tenue para las filas que no coinciden con el reporte de cuentas.
+SIN_COINCIDENCIA = ft.Colors.with_opacity(0.16, ft.Colors.RED)
 
 
 class FilaBeneficiario:
@@ -32,6 +35,9 @@ class FilaBeneficiario:
         self.id = id_          # None mientras no se haya guardado en la base
         self.origen = origen   # nombre del archivo de origen (informativo)
         self.ruta_archivo = ruta_archivo  # ruta completa para previsualizar
+        # Conciliación con el reporte de cuentas: None = no aplica (sin reporte
+        # importado), True = la CLABE coincide, False = no coincide (fila roja).
+        self.conciliacion: bool | None = None
 
         self.tf_clabe = ft.TextField(
             value=clabe, dense=True, width=W_CLABE, max_length=18, text_size=12,
@@ -111,6 +117,8 @@ class FilaBeneficiario:
 
     def _cambio_clabe(self, _e) -> None:
         self.txt_banco.value = banco_desde_clabe(solo_digitos(self.tf_clabe.value)) or "—"
+        # Si hay un reporte importado, re-concilia esta fila con la nueva CLABE.
+        self.seccion._conciliar_una(self)
         self._actualizar_estado()
         self.seccion.page.update()
 
@@ -175,6 +183,23 @@ class FilaBeneficiario:
             self.seccion.avisar("Beneficiario guardado.", VERDE)
         return True
 
+    # ------------------------------------------------------- conciliación
+    def aplicar_reporte(self, rep: reporte_cuentas.CuentaReporte) -> None:
+        """Complementa el registro con los datos del reporte (fuente autorizada):
+        toma el nombre del beneficiario y el correo cuando la CLABE coincide."""
+        if rep.beneficiario:
+            self.tf_benef.value = rep.beneficiario
+            self.tf_alias.value = rep.beneficiario
+        if rep.correo:
+            self.tf_email.value = rep.correo
+        self._actualizar_estado()
+
+    def marcar_conciliacion(self, estado: bool | None) -> None:
+        """Pinta la fila según la conciliación: rojo si no coincide con el
+        reporte; sin color si coincide o si no hay reporte importado."""
+        self.conciliacion = estado
+        self.fila.color = SIN_COINCIDENCIA if estado is False else None
+
     def previsualizar(self) -> None:
         """Abre el archivo original del registro en el visor predeterminado del
         sistema, para revisar el documento y corregir lo que haga falta."""
@@ -197,6 +222,9 @@ class SeccionAltaBeneficiarios:
         self.page = app.page
         self.picker = app.picker
         self.filas: list[FilaBeneficiario] = []
+        # Reporte de cuentas importado (para conciliar). Vacío = no se subió.
+        self.catalogo_reporte: dict[str, reporte_cuentas.CuentaReporte] = {}
+        self.nombre_reporte = ""
         self.contenido = self._construir()
 
     def avisar(self, mensaje: str, color: str | None = None) -> None:
@@ -212,6 +240,17 @@ class SeccionAltaBeneficiarios:
             icon=ft.Icons.UPLOAD_FILE,
             on_click=self._seleccionar,
         )
+        # Importación del reporte de cuentas (Excel) para conciliar.
+        self.txt_estado_rep = ft.Text("", color=GRIS, size=12)
+        self.btn_reporte = ft.OutlinedButton(
+            content="Importar reporte de cuentas (Excel)",
+            icon=ft.Icons.TABLE_VIEW,
+            on_click=self._importar_reporte,
+        )
+        self.btn_quitar_reporte = ft.IconButton(
+            icon=ft.Icons.CLOSE, tooltip="Quitar reporte (cancela la conciliación)",
+            icon_color=GRIS, visible=False, on_click=self._quitar_reporte,
+        )
         seccion_carga = tarjeta(
             "1. Cargar estados de cuenta",
             ft.Column(
@@ -226,6 +265,22 @@ class SeccionAltaBeneficiarios:
                         spacing=12,
                     ),
                     self.txt_estado,
+                    ft.Divider(height=1),
+                    ft.Row(
+                        [
+                            self.btn_reporte,
+                            self.btn_quitar_reporte,
+                            ft.Text(
+                                "Opcional: súbelo para conciliar las cuentas; se "
+                                "completa el nombre/correo y se marcan en rojo las "
+                                "que no aparezcan en el reporte.",
+                                color=GRIS, size=12, italic=True, expand=True,
+                            ),
+                        ],
+                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                        spacing=12,
+                    ),
+                    self.txt_estado_rep,
                 ],
                 spacing=8,
             ),
@@ -340,8 +395,19 @@ class SeccionAltaBeneficiarios:
             )
             for ico, color, txt in items
         ]
+        # Muestra de la fila roja (sin coincidencia en el reporte de cuentas).
+        chip_rojo = ft.Row(
+            [
+                ft.Container(width=16, height=16, bgcolor=SIN_COINCIDENCIA,
+                             border=ft.Border.all(1, ROJO), border_radius=3),
+                ft.Text("Fila en rojo: sin coincidencia en el reporte", size=12, color=GRIS),
+            ],
+            spacing=5,
+            tight=True,
+        )
         return ft.Row(
-            [ft.Text("Leyenda:", size=12, weight=ft.FontWeight.BOLD, color=GRIS), *chips],
+            [ft.Text("Leyenda:", size=12, weight=ft.FontWeight.BOLD, color=GRIS),
+             *chips, chip_rojo],
             spacing=18,
             wrap=True,
             vertical_alignment=ft.CrossAxisAlignment.CENTER,
@@ -351,9 +417,102 @@ class SeccionAltaBeneficiarios:
     def _redibujar_tabla(self) -> None:
         self.tabla.rows = [f.fila for f in self.filas]
         self._ajustar_anchos()
+        self._remarcar_conciliacion()
         self._actualizar_resumen()
         self._refrescar_candado_export()
         self.page.update()
+
+    # ======================================================== conciliación
+    async def _importar_reporte(self, _e) -> None:
+        """Importa el Excel 'Reporte Cuentas Bancarias' y concilia la tabla."""
+        archivos = await self.picker.pick_files(
+            dialog_title="Selecciona el reporte de cuentas (Excel)",
+            allowed_extensions=["xlsx", "xls"],
+            allow_multiple=False,
+        )
+        if not archivos:
+            return
+        ruta = archivos[0].path
+        try:
+            catalogo = await asyncio.to_thread(reporte_cuentas.leer, ruta)
+        except Exception as exc:  # noqa: BLE001 — se reporta al usuario
+            self.avisar(f"No se pudo leer el reporte: {exc}", ROJO)
+            return
+        if not catalogo:
+            self.avisar("El reporte no contiene cuentas con CLABE válida.", NARANJA)
+            return
+        self.catalogo_reporte = catalogo
+        self.nombre_reporte = os.path.basename(ruta)
+        self.btn_quitar_reporte.visible = True
+        self._conciliar()
+        self._redibujar_tabla()
+        self.avisar(
+            f"Reporte importado: {len(catalogo)} cuenta(s). Conciliación aplicada.",
+            VERDE,
+        )
+
+    def _quitar_reporte(self, _e) -> None:
+        """Cancela la conciliación: olvida el reporte y limpia el marcado rojo."""
+        self.catalogo_reporte = {}
+        self.nombre_reporte = ""
+        self.btn_quitar_reporte.visible = False
+        self.txt_estado_rep.value = ""
+        for f in self.filas:
+            f.marcar_conciliacion(None)
+        self.page.update()
+
+    def _conciliar(self) -> None:
+        """Concilia TODAS las filas con el reporte: complementa nombre/correo de
+        las que coinciden por CLABE y marca en rojo las que no. Solo actúa si hay
+        un reporte importado (es decir, si el usuario subió ambos archivos)."""
+        if not self.catalogo_reporte:
+            return
+        conciliados = sin_match = 0
+        for f in self.filas:
+            clabe = solo_digitos(f.tf_clabe.value)
+            rep = self.catalogo_reporte.get(clabe) if len(clabe) == 18 else None
+            if rep:
+                f.aplicar_reporte(rep)
+                f.marcar_conciliacion(True)
+                conciliados += 1
+            elif len(clabe) == 18:
+                f.marcar_conciliacion(False)
+                sin_match += 1
+            else:
+                f.marcar_conciliacion(None)  # CLABE incompleta: el ícono ya avisa
+        self.txt_estado_rep.value = (
+            f"Reporte '{self.nombre_reporte}': {conciliados} conciliado(s), "
+            f"{sin_match} sin coincidencia (marcado en rojo)."
+        )
+
+    def _remarcar_conciliacion(self) -> None:
+        """Refresca SOLO el color de las filas (sin reescribir datos), para
+        mantener el marcado tras redibujar la tabla."""
+        for f in self.filas:
+            if not self.catalogo_reporte:
+                f.marcar_conciliacion(None)
+                continue
+            clabe = solo_digitos(f.tf_clabe.value)
+            if len(clabe) != 18:
+                f.marcar_conciliacion(None)
+            else:
+                f.marcar_conciliacion(clabe in self.catalogo_reporte)
+
+    def _conciliar_una(self, fila: FilaBeneficiario) -> None:
+        """Concilia una sola fila (al editar su CLABE en vivo)."""
+        if not self.catalogo_reporte:
+            fila.marcar_conciliacion(None)
+            return
+        clabe = solo_digitos(fila.tf_clabe.value)
+        if len(clabe) != 18:
+            fila.marcar_conciliacion(None)
+            return
+        rep = self.catalogo_reporte.get(clabe)
+        if rep:
+            fila.aplicar_reporte(rep)
+            fila.marcar_conciliacion(True)
+        else:
+            fila.marcar_conciliacion(False)
 
     def _cambio_formato_export(self, _e=None) -> None:
         """Ajusta el botón de exportar según el formato/banco elegido."""
@@ -471,6 +630,8 @@ class SeccionAltaBeneficiarios:
         if errores:
             resumen += " Con error: " + "; ".join(errores)
         self.txt_estado.value = resumen
+        # Si ya hay un reporte importado, concilia los nuevos registros.
+        self._conciliar()
         self._actualizar_resumen()
         self.page.update()
 
