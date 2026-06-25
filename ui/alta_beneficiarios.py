@@ -795,19 +795,19 @@ class SeccionAltaBeneficiarios:
 
     async def _exportar_alta_bancomer(self, guardados) -> None:
         """Genera la carpeta 'CUENTAS PARA ALTA BANCOMER - dd-mm-aaaa' con los
-        TXT de alta de cuentas para el portal Bancomer, separando los registros
-        que tienen correo de los que no (estos requieren capturar el correo)."""
+        TXT de alta de cuentas, separando las cuentas Bancomer (código 012) de
+        las de otros bancos (el alta del portal Bancomer es solo para las 012)."""
         validos = [b for b in guardados if validar_clabe(b.clabe)]
         if not validos:
             self.avisar("No hay registros con CLABE válida para exportar.", ROJO)
             return
-        con_correo = [
+        bancomer = [
             (b.clabe, b.beneficiario, b.email or "")
-            for b in validos if (b.email or "").strip()
+            for b in validos if b.clabe[:3] == "012"
         ]
-        sin_correo = [
-            (b.clabe, b.beneficiario, "")
-            for b in validos if not (b.email or "").strip()
+        otros = [
+            (b.clabe, b.beneficiario, b.email or "")
+            for b in validos if b.clabe[:3] != "012"
         ]
 
         destino = await self.picker.get_directory_path(
@@ -822,16 +822,16 @@ class SeccionAltaBeneficiarios:
         try:
             os.makedirs(carpeta, exist_ok=True)
             resumen: list[str] = []
-            if con_correo:
-                with open(os.path.join(carpeta, "Cuentas con correo.txt"),
+            if bancomer:
+                with open(os.path.join(carpeta, "Cuentas Bancomer.txt"),
                           "w", encoding="latin-1", newline="") as fh:
-                    fh.write(exportador_alta_bancomer.generar_txt(con_correo))
-                resumen.append(f"{len(con_correo)} con correo")
-            if sin_correo:
-                with open(os.path.join(carpeta, "Cuentas sin correo.txt"),
+                    fh.write(exportador_alta_bancomer.generar_txt(bancomer))
+                resumen.append(f"{len(bancomer)} Bancomer")
+            if otros:
+                with open(os.path.join(carpeta, "Cuentas otros bancos.txt"),
                           "w", encoding="latin-1", newline="") as fh:
-                    fh.write(exportador_alta_bancomer.generar_txt(sin_correo))
-                resumen.append(f"{len(sin_correo)} sin correo")
+                    fh.write(exportador_alta_bancomer.generar_txt(otros))
+                resumen.append(f"{len(otros)} de otros bancos")
         except Exception as exc:  # noqa: BLE001 — se reporta al usuario
             self.avisar(f"No se pudo generar la carpeta: {exc}", ROJO)
             return
