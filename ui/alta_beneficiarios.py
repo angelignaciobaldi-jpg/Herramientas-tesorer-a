@@ -47,8 +47,10 @@ class FilaBeneficiario:
         #   "sin"    -> no coincide ni por CLABE ni por nombre (fila roja)
         self.conciliacion: str | None = None
 
+        # Sin max_length (evita el contador "X/18" que desalineaba la fila); el
+        # límite de 18 dígitos se mantiene por código en _cambio_clabe.
         self.tf_clabe = ft.TextField(
-            value=clabe, dense=True, width=W_CLABE, max_length=18, text_size=12,
+            value=clabe, dense=True, width=W_CLABE, text_size=12,
             content_padding=8, text_align=ft.TextAlign.CENTER, on_change=self._cambio_clabe,
         )
         self.tf_monto = ft.TextField(
@@ -124,7 +126,11 @@ class FilaBeneficiario:
         )
 
     def _cambio_clabe(self, _e) -> None:
-        self.txt_banco.value = banco_desde_clabe(solo_digitos(self.tf_clabe.value)) or "—"
+        # Limita la CLABE a 18 dígitos (sin max_length, para no mostrar contador).
+        limpio = solo_digitos(self.tf_clabe.value)[:18]
+        if limpio != (self.tf_clabe.value or ""):
+            self.tf_clabe.value = limpio
+        self.txt_banco.value = banco_desde_clabe(limpio) or "—"
         # Si hay un reporte importado, re-concilia esta fila con la nueva CLABE.
         self.seccion._conciliar_una(self)
         self._actualizar_estado()
@@ -844,6 +850,11 @@ class SeccionAltaBeneficiarios:
                           "w", encoding="latin-1", newline="") as fh:
                     fh.write(exportador_alta_bancomer.generar_txt(sub))
                 resumen.append(f"{len(sub)} {etiqueta}")
+        except PermissionError:
+            self.avisar(
+                "No se pudo guardar: algún archivo de la carpeta está abierto. "
+                "Ciérralo e intenta de nuevo.", ROJO)
+            return
         except Exception as exc:  # noqa: BLE001 — se reporta al usuario
             self.avisar(f"No se pudo generar la carpeta: {exc}", ROJO)
             return
@@ -872,6 +883,11 @@ class SeccionAltaBeneficiarios:
             ruta += ".xls"
         try:
             exportador_alta_banregio.generar(ruta, registros)
+        except PermissionError:
+            self.avisar(
+                "No se pudo guardar: el archivo está abierto en Excel. Ciérralo e "
+                "intenta de nuevo (o guarda con otro nombre).", ROJO)
+            return
         except Exception as exc:  # noqa: BLE001 — se reporta al usuario
             self.avisar(f"No se pudo guardar el archivo: {exc}", ROJO)
             return
