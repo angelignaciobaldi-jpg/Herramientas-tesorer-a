@@ -27,29 +27,25 @@ def generar(ruta: str, contexto: dict, registros: list[tuple]) -> None:
         registros: lista de (clabe, monto, beneficiario, concepto)
     """
     fecha_devol = _fmt_fecha(contexto.get("fecha", ""))
+    empresa = contexto.get("empresa", "")
+    banco = contexto.get("banco", "")
+    cuenta_origen = contexto.get("cuenta_origen", "")
+    num_cuenta = contexto.get("num_cuenta", "")
+
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "Devoluciones"
 
-    # --- Encabezado informativo ---
+    # --- Título ---
     ws["A1"] = "Reporte de dispersión de devoluciones"
     ws["A1"].font = Font(bold=True, size=14, color=_AZUL)
-    info = [
-        ("Empresa:", contexto.get("empresa", "")),
-        ("Banco:", contexto.get("banco", "")),
-        ("Cuenta origen (CLABE):", contexto.get("cuenta_origen", "")),
-        ("Número de cuenta:", contexto.get("num_cuenta", "")),
-        ("Fecha:", fecha_devol),
-    ]
-    fila = 3
-    for etiqueta, valor in info:
-        ws.cell(row=fila, column=1, value=etiqueta).font = Font(bold=True)
-        ws.cell(row=fila, column=2, value=valor)
-        fila += 1
 
-    # --- Tabla de movimientos ---
-    fila += 1
-    encabezados = ["#", "CLABE", "Monto", "Beneficiario",
+    # --- Tabla (los datos de empresa/banco/cuenta van como columnas, para poder
+    #     acumular dispersiones de distintas empresas/bancos en un mismo reporte
+    #     maestro) ---
+    fila = 3
+    encabezados = ["#", "Empresa que paga", "Banco origen", "Cuenta origen (CLABE)",
+                   "Número de cuenta", "CLABE", "Monto", "Beneficiario",
                    "Concepto / Referencia", "Fecha de devolución"]
     for col, titulo in enumerate(encabezados, start=1):
         c = ws.cell(row=fila, column=col, value=titulo)
@@ -58,30 +54,33 @@ def generar(ruta: str, contexto: dict, registros: list[tuple]) -> None:
         c.alignment = Alignment(horizontal="center", vertical="center")
         c.border = _BORDE
 
+    # Columnas centradas (#, cuentas, CLABE, fecha) y la de monto (con formato).
+    CENTRADAS = {1, 4, 5, 6, 10}
+    COL_MONTO = 7
     fila_inicio = fila + 1
     for i, (clabe, monto, beneficiario, concepto) in enumerate(registros, start=1):
-        valores = [i, clabe, float(monto or 0), beneficiario, concepto, fecha_devol]
+        valores = [i, empresa, banco, cuenta_origen, num_cuenta, clabe,
+                   float(monto or 0), beneficiario, concepto, fecha_devol]
         for col, valor in enumerate(valores, start=1):
             c = ws.cell(row=fila_inicio + i - 1, column=col, value=valor)
             c.border = _BORDE
-            if col == 1 or col == 6:
+            if col in CENTRADAS:
                 c.alignment = Alignment(horizontal="center")
-            if col == 2:
-                c.alignment = Alignment(horizontal="center")
-            if col == 3:
+            if col == COL_MONTO:
                 c.number_format = '#,##0.00'
 
     # --- Total de montos ---
     fila_total = fila_inicio + len(registros)
-    ws.cell(row=fila_total, column=2, value="TOTAL").font = Font(bold=True)
-    ct = ws.cell(row=fila_total, column=3,
-                 value=f"=SUM(C{fila_inicio}:C{fila_total - 1})")
+    ws.cell(row=fila_total, column=COL_MONTO - 1, value="TOTAL").font = Font(bold=True)
+    ct = ws.cell(row=fila_total, column=COL_MONTO,
+                 value=f"=SUM(G{fila_inicio}:G{fila_total - 1})")
     ct.font = Font(bold=True)
     ct.number_format = '#,##0.00'
     ct.fill = PatternFill("solid", fgColor=_GRIS)
 
     # --- Anchos de columna ---
-    anchos = {"A": 5, "B": 24, "C": 16, "D": 34, "E": 34, "F": 22}
+    anchos = {"A": 5, "B": 38, "C": 14, "D": 22, "E": 18, "F": 22,
+              "G": 16, "H": 30, "I": 28, "J": 18}
     for col, ancho in anchos.items():
         ws.column_dimensions[col].width = ancho
 
