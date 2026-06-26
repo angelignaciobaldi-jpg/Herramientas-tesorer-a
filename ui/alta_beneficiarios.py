@@ -13,7 +13,7 @@ from datetime import date
 import flet as ft
 
 from core import (
-    db, exportador, exportador_alta_bancomer, exportador_alta_banregio, ocr,
+    db, exportador_alta_bancomer, exportador_alta_banregio, ocr,
     reporte_cuentas,
 )
 from core.catalogo_bancos import banco_desde_clabe
@@ -332,19 +332,18 @@ class SeccionAltaBeneficiarios:
             vertical_lines=ft.BorderSide(1, ft.Colors.with_opacity(0.4, ft.Colors.OUTLINE_VARIANT)),
         )
         self.txt_resumen = ft.Text("", color=GRIS, size=12)
-        # Formato/banco de exportación: Bancomer -> TXT (dispersión) ;
+        # Formato de exportación: Bancomer -> carpeta con TXT de alta de cuentas ;
         # Banregio -> Excel de alta de cuentas.
         self.dd_formato = ft.Dropdown(
-            label="Exportar para", width=300, value="Bancomer",
+            label="Exportar para", width=300, value="BancomerAlta",
             options=[
-                ft.dropdown.Option(key="Bancomer", text="Bancomer · Dispersión (TXT)"),
-                ft.dropdown.Option(key="BancomerAlta", text="Bancomer · Alta de cuentas (carpeta)"),
+                ft.dropdown.Option(key="BancomerAlta", text="Bancomer · Alta de cuentas (Carpeta TXT)"),
                 ft.dropdown.Option(key="Banregio", text="Banregio · Alta (Excel)"),
             ],
             on_select=self._cambio_formato_export,
         )
         self.btn_export = ft.FilledButton(
-            content="Exportar TXT (Bancomer)", icon=ft.Icons.DOWNLOAD,
+            content="Generar carpeta de alta (Bancomer)", icon=ft.Icons.CREATE_NEW_FOLDER,
             on_click=self._exportar,
         )
         barra = ft.Row(
@@ -556,37 +555,24 @@ class SeccionAltaBeneficiarios:
             fila.marcar_conciliacion("sin")
 
     def _cambio_formato_export(self, _e=None) -> None:
-        """Ajusta el botón de exportar según el formato/banco elegido."""
+        """Ajusta el botón de exportar según el formato elegido."""
         if self.dd_formato.value == "Banregio":
             self.btn_export.content = "Exportar Excel (Banregio)"
             self.btn_export.icon = ft.Icons.TABLE_VIEW
-        elif self.dd_formato.value == "BancomerAlta":
+        else:  # BancomerAlta
             self.btn_export.content = "Generar carpeta de alta (Bancomer)"
             self.btn_export.icon = ft.Icons.CREATE_NEW_FOLDER
-        else:
-            self.btn_export.content = "Exportar TXT (Bancomer)"
-            self.btn_export.icon = ft.Icons.DOWNLOAD
         self._refrescar_candado_export()
 
     def _refrescar_candado_export(self) -> None:
-        """Bloquea la exportación si falta un monto. El candado SOLO aplica al
-        formato Bancomer de dispersión (que usa montos); ni el alta Banregio ni
-        el alta de cuentas Bancomer usan montos."""
-        if self.dd_formato.value != "Bancomer":
-            self.btn_export.disabled = False
-            self.btn_export.tooltip = (
-                "Genera el archivo Excel de alta para Banregio"
-                if self.dd_formato.value == "Banregio"
-                else "Genera la carpeta con los TXT de alta de cuentas Bancomer"
-            )
-            self.page.update()
-            return
-        sin_monto = sum(1 for b in db.listar() if b.monto is None)
-        self.btn_export.disabled = sin_monto > 0
+        """Ajusta el tooltip del botón de exportar. Ya no hay candado por monto:
+        las exportaciones restantes (alta de cuentas Bancomer y alta Banregio)
+        no usan montos."""
+        self.btn_export.disabled = False
         self.btn_export.tooltip = (
-            f"Hay {sin_monto} registro(s) guardado(s) sin monto. Captura el monto "
-            "y guarda para poder exportar."
-            if sin_monto else "Genera el archivo TXT de dispersión"
+            "Genera el archivo Excel de alta para Banregio"
+            if self.dd_formato.value == "Banregio"
+            else "Genera la carpeta con los TXT de alta de cuentas Bancomer"
         )
         self.page.update()
 
@@ -779,8 +765,8 @@ class SeccionAltaBeneficiarios:
         )
 
     async def _exportar(self, _e) -> None:
-        """Exporta los registros guardados en el formato del banco elegido:
-        Bancomer -> TXT de dispersión ; Banregio -> Excel de alta de cuentas."""
+        """Exporta los registros guardados en el formato elegido: Bancomer ->
+        carpeta con los TXT de alta de cuentas ; Banregio -> Excel de alta."""
         guardados = db.listar()
         if not guardados:
             self.avisar("No hay registros guardados para exportar.", ROJO)
@@ -788,10 +774,8 @@ class SeccionAltaBeneficiarios:
 
         if self.dd_formato.value == "Banregio":
             await self._exportar_alta_banregio(guardados)
-        elif self.dd_formato.value == "BancomerAlta":
+        else:  # BancomerAlta
             await self._exportar_alta_bancomer(guardados)
-        else:
-            await self._exportar_dispersion_bancomer(guardados)
 
     async def _exportar_alta_bancomer(self, guardados) -> None:
         """Genera la carpeta 'CUENTAS PARA ALTA BANCOMER - dd-mm-aaaa' con los
@@ -853,38 +837,6 @@ class SeccionAltaBeneficiarios:
         except Exception:  # noqa: BLE001 — abrir es opcional
             pass
         self.avisar("Carpeta de alta generada (" + ", ".join(resumen) + ").", VERDE)
-
-    async def _exportar_dispersion_bancomer(self, guardados) -> None:
-        # Candado: no se exporta si algún registro guardado no tiene monto.
-        sin_monto = sum(1 for b in guardados if b.monto is None)
-        if sin_monto:
-            self.avisar(
-                f"No se puede exportar: {sin_monto} registro(s) guardado(s) sin monto. "
-                "Captura el monto y guárdalo.",
-                ROJO,
-            )
-            return
-        registros = [
-            (b.clabe, b.monto, b.beneficiario, b.alias)
-            for b in guardados
-            if validar_clabe(b.clabe)
-        ]
-        ruta = await self.picker.save_file(
-            dialog_title="Guardar archivo de dispersión TXT (Bancomer)",
-            file_name="dispersion.txt", allowed_extensions=["txt"],
-        )
-        if not ruta:
-            return
-        if not ruta.lower().endswith(".txt"):
-            ruta += ".txt"
-        try:
-            contenido = exportador.generar_txt(registros)
-            with open(ruta, "w", encoding="latin-1", newline="") as fh:
-                fh.write(contenido)
-        except Exception as exc:  # noqa: BLE001 — se reporta al usuario
-            self.avisar(f"No se pudo guardar el archivo: {exc}", ROJO)
-            return
-        self.avisar(f"TXT generado con {len(registros)} registro(s) guardado(s).", VERDE)
 
     async def _exportar_alta_banregio(self, guardados) -> None:
         registros = [
