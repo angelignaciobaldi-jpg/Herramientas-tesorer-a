@@ -8,18 +8,26 @@ from __future__ import annotations
 
 import asyncio
 import os
+from datetime import date
 
 import flet as ft
 
-from core import db, exportador, exportador_alta_banregio, ocr
+from core import (
+    db, exportador_alta_bancomer, exportador_alta_banregio, ocr,
+    reporte_cuentas,
+)
 from core.catalogo_bancos import banco_desde_clabe
-from core.extractores import extraer_datos, nombre_desde_archivo, validar_clabe
+from core.extractores import extraer_clabes, extraer_datos, nombre_desde_archivo, validar_clabe
 from ui.comun import (
     EXTENSIONES, GRIS, NARANJA, ROJO, VERDE,
     W_ACCIONES, W_BANCO, W_CLABE, W_ESTADO, W_MONTO, W_NOMBRE,
     celda_centrada, encabezado_col, fmt_monto, parse_monto, solo_digitos,
     tarjeta, validar,
 )
+
+# Fondos de fila según la conciliación con el reporte de cuentas.
+SIN_COINCIDENCIA = ft.Colors.with_opacity(0.16, ft.Colors.RED)      # no coincide
+SUGERIDO_NOMBRE = ft.Colors.with_opacity(0.18, ft.Colors.AMBER)     # CLABE sugerida por nombre
 
 
 class FilaBeneficiario:
@@ -32,6 +40,12 @@ class FilaBeneficiario:
         self.id = id_          # None mientras no se haya guardado en la base
         self.origen = origen   # nombre del archivo de origen (informativo)
         self.ruta_archivo = ruta_archivo  # ruta completa para previsualizar
+        # Estado de conciliación con el reporte de cuentas:
+        #   None     -> no aplica (sin reporte importado)
+        #   "ok"     -> la CLABE coincide con el reporte
+        #   "nombre" -> CLABE sugerida porque el nombre coincide (fila ámbar)
+        #   "sin"    -> no coincide ni por CLABE ni por nombre (fila roja)
+        self.conciliacion: str | None = None
 
         self.tf_clabe = ft.TextField(
             value=clabe, dense=True, width=W_CLABE, max_length=18, text_size=12,
@@ -111,6 +125,8 @@ class FilaBeneficiario:
 
     def _cambio_clabe(self, _e) -> None:
         self.txt_banco.value = banco_desde_clabe(solo_digitos(self.tf_clabe.value)) or "—"
+        # Si hay un reporte importado, re-concilia esta fila con la nueva CLABE.
+        self.seccion._conciliar_una(self)
         self._actualizar_estado()
         self.seccion.page.update()
 
@@ -175,6 +191,33 @@ class FilaBeneficiario:
             self.seccion.avisar("Beneficiario guardado.", VERDE)
         return True
 
+    # ------------------------------------------------------- conciliación
+    def aplicar_reporte(self, rep: reporte_cuentas.CuentaReporte,
+                        incluir_clabe: bool = False) -> None:
+        """Complementa el registro con los datos del reporte (fuente autorizada):
+        toma el nombre del beneficiario y el correo. Con incluir_clabe también
+        rellena la CLABE (cuando la coincidencia fue por nombre)."""
+        if incluir_clabe and rep.clabe:
+            self.tf_clabe.value = rep.clabe
+            self.txt_banco.value = banco_desde_clabe(rep.clabe) or "—"
+        if rep.beneficiario:
+            self.tf_benef.value = rep.beneficiario
+            self.tf_alias.value = rep.beneficiario
+        if rep.correo:
+            self.tf_email.value = rep.correo
+        self._actualizar_estado()
+
+    def marcar_conciliacion(self, estado: str | None) -> None:
+        """Pinta la fila según la conciliación: rojo si no coincide; ámbar si la
+        CLABE se sugirió por nombre (revisar); sin color si coincide por CLABE o
+        si no hay reporte importado."""
+        self.conciliacion = estado
+        self.fila.color = (
+            SIN_COINCIDENCIA if estado == "sin"
+            else SUGERIDO_NOMBRE if estado == "nombre"
+            else None
+        )
+
     def previsualizar(self) -> None:
         """Abre el archivo original del registro en el visor predeterminado del
         sistema, para revisar el documento y corregir lo que haga falta."""
@@ -197,6 +240,9 @@ class SeccionAltaBeneficiarios:
         self.page = app.page
         self.picker = app.picker
         self.filas: list[FilaBeneficiario] = []
+        # Reporte de cuentas importado (para conciliar). Vacío = no se subió.
+        self.catalogo_reporte: dict[str, reporte_cuentas.CuentaReporte] = {}
+        self.nombre_reporte = ""
         self.contenido = self._construir()
 
     def avisar(self, mensaje: str, color: str | None = None) -> None:
@@ -212,6 +258,17 @@ class SeccionAltaBeneficiarios:
             icon=ft.Icons.UPLOAD_FILE,
             on_click=self._seleccionar,
         )
+        # Importación del reporte de cuentas (Excel) para conciliar.
+        self.txt_estado_rep = ft.Text("", color=GRIS, size=12)
+        self.btn_reporte = ft.OutlinedButton(
+            content="Importar reporte de cuentas (Excel)",
+            icon=ft.Icons.TABLE_VIEW,
+            on_click=self._importar_reporte,
+        )
+        self.btn_quitar_reporte = ft.IconButton(
+            icon=ft.Icons.CLOSE, tooltip="Quitar reporte (cancela la conciliación)",
+            icon_color=GRIS, visible=False, on_click=self._quitar_reporte,
+        )
         seccion_carga = tarjeta(
             "1. Cargar estados de cuenta",
             ft.Column(
@@ -226,6 +283,22 @@ class SeccionAltaBeneficiarios:
                         spacing=12,
                     ),
                     self.txt_estado,
+                    ft.Divider(height=1),
+                    ft.Row(
+                        [
+                            self.btn_reporte,
+                            self.btn_quitar_reporte,
+                            ft.Text(
+                                "Opcional: súbelo para conciliar las cuentas; se "
+                                "completa el nombre/correo y se marcan en rojo las "
+                                "que no aparezcan en el reporte.",
+                                color=GRIS, size=12, italic=True, expand=True,
+                            ),
+                        ],
+                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                        spacing=12,
+                    ),
+                    self.txt_estado_rep,
                 ],
                 spacing=8,
             ),
@@ -259,18 +332,18 @@ class SeccionAltaBeneficiarios:
             vertical_lines=ft.BorderSide(1, ft.Colors.with_opacity(0.4, ft.Colors.OUTLINE_VARIANT)),
         )
         self.txt_resumen = ft.Text("", color=GRIS, size=12)
-        # Formato/banco de exportación: Bancomer -> TXT (dispersión) ;
+        # Formato de exportación: Bancomer -> carpeta con TXT de alta de cuentas ;
         # Banregio -> Excel de alta de cuentas.
         self.dd_formato = ft.Dropdown(
-            label="Exportar para", width=210, value="Bancomer",
+            label="Exportar para", width=300, value="BancomerAlta",
             options=[
-                ft.dropdown.Option(key="Bancomer", text="Bancomer (TXT)"),
-                ft.dropdown.Option(key="Banregio", text="Banregio (Excel)"),
+                ft.dropdown.Option(key="BancomerAlta", text="Bancomer · Alta de cuentas (Carpeta TXT)"),
+                ft.dropdown.Option(key="Banregio", text="Banregio · Alta (Excel)"),
             ],
             on_select=self._cambio_formato_export,
         )
         self.btn_export = ft.FilledButton(
-            content="Exportar TXT (Bancomer)", icon=ft.Icons.DOWNLOAD,
+            content="Generar carpeta de alta (Bancomer)", icon=ft.Icons.CREATE_NEW_FOLDER,
             on_click=self._exportar,
         )
         barra = ft.Row(
@@ -340,8 +413,25 @@ class SeccionAltaBeneficiarios:
             )
             for ico, color, txt in items
         ]
+        # Muestras de las filas coloreadas por la conciliación con el reporte.
+        def swatch(color, borde, texto):
+            return ft.Row(
+                [
+                    ft.Container(width=16, height=16, bgcolor=color,
+                                 border=ft.Border.all(1, borde), border_radius=3),
+                    ft.Text(texto, size=12, color=GRIS),
+                ],
+                spacing=5,
+                tight=True,
+            )
+
+        chip_ambar = swatch(SUGERIDO_NOMBRE, NARANJA,
+                            "Fila ámbar: CLABE sugerida por nombre (verifica)")
+        chip_rojo = swatch(SIN_COINCIDENCIA, ROJO,
+                          "Fila en rojo: sin coincidencia en el reporte")
         return ft.Row(
-            [ft.Text("Leyenda:", size=12, weight=ft.FontWeight.BOLD, color=GRIS), *chips],
+            [ft.Text("Leyenda:", size=12, weight=ft.FontWeight.BOLD, color=GRIS),
+             *chips, chip_ambar, chip_rojo],
             spacing=18,
             wrap=True,
             vertical_alignment=ft.CrossAxisAlignment.CENTER,
@@ -351,23 +441,133 @@ class SeccionAltaBeneficiarios:
     def _redibujar_tabla(self) -> None:
         self.tabla.rows = [f.fila for f in self.filas]
         self._ajustar_anchos()
+        self._remarcar_conciliacion()
         self._actualizar_resumen()
         self._refrescar_candado_export()
         self.page.update()
 
+    # ======================================================== conciliación
+    async def _importar_reporte(self, _e) -> None:
+        """Importa el Excel 'Reporte Cuentas Bancarias' y concilia la tabla."""
+        archivos = await self.picker.pick_files(
+            dialog_title="Selecciona el reporte de cuentas (Excel)",
+            allowed_extensions=["xlsx", "xls"],
+            allow_multiple=False,
+        )
+        if not archivos:
+            return
+        ruta = archivos[0].path
+        try:
+            catalogo = await asyncio.to_thread(reporte_cuentas.leer, ruta)
+        except Exception as exc:  # noqa: BLE001 — se reporta al usuario
+            self.avisar(f"No se pudo leer el reporte: {exc}", ROJO)
+            return
+        if not catalogo:
+            self.avisar("El reporte no contiene cuentas con CLABE válida.", NARANJA)
+            return
+        self.catalogo_reporte = catalogo
+        self.nombre_reporte = os.path.basename(ruta)
+        self.btn_quitar_reporte.visible = True
+        self._conciliar()
+        self._redibujar_tabla()
+        self.avisar(
+            f"Reporte importado: {len(catalogo)} cuenta(s). Conciliación aplicada.",
+            VERDE,
+        )
+
+    def _quitar_reporte(self, _e) -> None:
+        """Cancela la conciliación: olvida el reporte y limpia el marcado rojo."""
+        self.catalogo_reporte = {}
+        self.nombre_reporte = ""
+        self.btn_quitar_reporte.visible = False
+        self.txt_estado_rep.value = ""
+        for f in self.filas:
+            f.marcar_conciliacion(None)
+        self.page.update()
+
+    def _conciliar(self) -> None:
+        """Concilia TODAS las filas con el reporte. Primero por CLABE; si no hay
+        CLABE o no coincide, intenta por nombre del beneficiario y, si encuentra
+        una coincidencia clara, sugiere su CLABE (fila ámbar para revisar). Las
+        que no coinciden de ninguna forma se marcan en rojo. Solo actúa si hay un
+        reporte importado (es decir, si el usuario subió ambos archivos)."""
+        if not self.catalogo_reporte:
+            return
+        por_clabe = por_nombre = sin_match = 0
+        for f in self.filas:
+            clabe = solo_digitos(f.tf_clabe.value)
+            rep = self.catalogo_reporte.get(clabe) if len(clabe) == 18 else None
+            if rep:
+                f.aplicar_reporte(rep)
+                f.marcar_conciliacion("ok")
+                por_clabe += 1
+                continue
+            rep_n = reporte_cuentas.buscar_por_nombre(self.catalogo_reporte, f.tf_benef.value)
+            if rep_n:
+                f.aplicar_reporte(rep_n, incluir_clabe=True)
+                f.marcar_conciliacion("nombre")
+                por_nombre += 1
+            elif len(clabe) == 18:
+                f.marcar_conciliacion("sin")
+                sin_match += 1
+            else:
+                f.marcar_conciliacion(None)  # CLABE incompleta: el ícono ya avisa
+        self.txt_estado_rep.value = (
+            f"Reporte '{self.nombre_reporte}': {por_clabe} por CLABE, "
+            f"{por_nombre} por nombre (CLABE sugerida, revisa en ámbar), "
+            f"{sin_match} sin coincidencia (en rojo)."
+        )
+
+    def _remarcar_conciliacion(self) -> None:
+        """Refresca SOLO el color de las filas (sin reescribir datos), para
+        mantener el marcado tras redibujar la tabla. Conserva el aviso ámbar de
+        las filas cuya CLABE se sugirió por nombre."""
+        for f in self.filas:
+            if not self.catalogo_reporte:
+                f.marcar_conciliacion(None)
+                continue
+            if f.conciliacion == "nombre":
+                f.marcar_conciliacion("nombre")  # preserva el aviso de revisión
+                continue
+            clabe = solo_digitos(f.tf_clabe.value)
+            if len(clabe) != 18:
+                f.marcar_conciliacion(None)
+            elif clabe in self.catalogo_reporte:
+                f.marcar_conciliacion("ok")
+            else:
+                f.marcar_conciliacion("sin")
+
+    def _conciliar_una(self, fila: FilaBeneficiario) -> None:
+        """Concilia una sola fila por CLABE (al editar su CLABE en vivo). No
+        sugiere CLABE por nombre aquí para no pisar lo que el usuario escribe."""
+        if not self.catalogo_reporte:
+            fila.marcar_conciliacion(None)
+            return
+        clabe = solo_digitos(fila.tf_clabe.value)
+        if len(clabe) != 18:
+            fila.marcar_conciliacion(None)
+            return
+        rep = self.catalogo_reporte.get(clabe)
+        if rep:
+            fila.aplicar_reporte(rep)
+            fila.marcar_conciliacion("ok")
+        else:
+            fila.marcar_conciliacion("sin")
+
     def _cambio_formato_export(self, _e=None) -> None:
-        """Ajusta el botón de exportar según el formato/banco elegido."""
+        """Ajusta el botón de exportar según el formato elegido."""
         if self.dd_formato.value == "Banregio":
             self.btn_export.content = "Exportar Excel (Banregio)"
             self.btn_export.icon = ft.Icons.TABLE_VIEW
-        else:
-            self.btn_export.content = "Exportar TXT (Bancomer)"
-            self.btn_export.icon = ft.Icons.DOWNLOAD
+        else:  # BancomerAlta
+            self.btn_export.content = "Generar carpeta de alta (Bancomer)"
+            self.btn_export.icon = ft.Icons.CREATE_NEW_FOLDER
         self._refrescar_candado_export()
 
     def _refrescar_candado_export(self) -> None:
-        """Bloquea la exportación si falta un monto. El candado SOLO aplica al
-        formato Bancomer (TXT de dispersión); el alta Banregio no usa montos."""
+        """Bloquea la exportación si falta un monto. El candado aplica al alta de
+        cuentas Bancomer (el monto va dentro del TXT); el alta Banregio no usa
+        montos."""
         if self.dd_formato.value == "Banregio":
             self.btn_export.disabled = False
             self.btn_export.tooltip = "Genera el archivo Excel de alta para Banregio"
@@ -378,7 +578,7 @@ class SeccionAltaBeneficiarios:
         self.btn_export.tooltip = (
             f"Hay {sin_monto} registro(s) guardado(s) sin monto. Captura el monto "
             "y guarda para poder exportar."
-            if sin_monto else "Genera el archivo TXT de dispersión"
+            if sin_monto else "Genera la carpeta con los TXT de alta de cuentas Bancomer"
         )
         self.page.update()
 
@@ -450,6 +650,15 @@ class SeccionAltaBeneficiarios:
                 if not datos.clabe and not datos.beneficiario and not uso_ocr:
                     texto, _ = await asyncio.to_thread(ocr.extraer_texto, archivo.path, True)
                     datos = extraer_datos(texto)
+                # Último recurso para la CLABE: OCR en modo "texto disperso", que
+                # recupera números en tablas/celdas que la segmentación normal
+                # omite (p. ej. la tabla de una carta de asignación de cuenta).
+                if not datos.clabe:
+                    texto_sp = await asyncio.to_thread(ocr.texto_disperso, archivo.path)
+                    clabes_sp = extraer_clabes(texto_sp)
+                    if clabes_sp:
+                        datos.clabe = clabes_sp[0]
+                        datos.banco = banco_desde_clabe(datos.clabe)
                 # El nombre del archivo (si parece nombre de persona) es la
                 # fuente más confiable del beneficiario; tiene prioridad sobre
                 # el OCR. Si no, se usa lo identificado en el documento.
@@ -471,6 +680,8 @@ class SeccionAltaBeneficiarios:
         if errores:
             resumen += " Con error: " + "; ".join(errores)
         self.txt_estado.value = resumen
+        # Si ya hay un reporte importado, concilia los nuevos registros.
+        self._conciliar()
         self._actualizar_resumen()
         self.page.update()
 
@@ -560,8 +771,8 @@ class SeccionAltaBeneficiarios:
         )
 
     async def _exportar(self, _e) -> None:
-        """Exporta los registros guardados en el formato del banco elegido:
-        Bancomer -> TXT de dispersión ; Banregio -> Excel de alta de cuentas."""
+        """Exporta los registros guardados en el formato elegido: Bancomer ->
+        carpeta con los TXT de alta de cuentas ; Banregio -> Excel de alta."""
         guardados = db.listar()
         if not guardados:
             self.avisar("No hay registros guardados para exportar.", ROJO)
@@ -569,40 +780,78 @@ class SeccionAltaBeneficiarios:
 
         if self.dd_formato.value == "Banregio":
             await self._exportar_alta_banregio(guardados)
-        else:
-            await self._exportar_dispersion_bancomer(guardados)
+        else:  # BancomerAlta
+            await self._exportar_alta_bancomer(guardados)
 
-    async def _exportar_dispersion_bancomer(self, guardados) -> None:
-        # Candado: no se exporta si algún registro guardado no tiene monto.
-        sin_monto = sum(1 for b in guardados if b.monto is None)
+    async def _exportar_alta_bancomer(self, guardados) -> None:
+        """Genera la carpeta 'CUENTAS PARA ALTA BANCOMER - dd-mm-aaaa' con los
+        TXT de alta de cuentas, separados por banco (Bancomer 012 vs otros) y,
+        dentro de cada uno, por correo (con vs sin). El alta del portal Bancomer
+        aplica solo a las cuentas 012; las que no tienen correo se separan para
+        capturarlo antes de subirlas."""
+        validos = [b for b in guardados if validar_clabe(b.clabe)]
+        if not validos:
+            self.avisar("No hay registros con CLABE válida para exportar.", ROJO)
+            return
+        # El monto va dentro del TXT: no se exporta si algún registro no lo tiene.
+        sin_monto = sum(1 for b in validos if b.monto is None)
         if sin_monto:
             self.avisar(
-                f"No se puede exportar: {sin_monto} registro(s) guardado(s) sin monto. "
+                f"No se puede exportar: {sin_monto} registro(s) sin monto. "
                 "Captura el monto y guárdalo.",
                 ROJO,
             )
             return
-        registros = [
-            (b.clabe, b.monto, b.beneficiario, b.alias)
-            for b in guardados
-            if validar_clabe(b.clabe)
+
+        def es_bancomer(b) -> bool:
+            return b.clabe[:3] == "012"
+
+        def tiene_correo(b) -> bool:
+            return bool((b.email or "").strip())
+
+        # (nombre de archivo, filtro, etiqueta para el resumen)
+        grupos = [
+            ("Cuentas Bancomer con correo.txt",
+             lambda b: es_bancomer(b) and tiene_correo(b), "Bancomer con correo"),
+            ("Cuentas Bancomer sin correo.txt",
+             lambda b: es_bancomer(b) and not tiene_correo(b), "Bancomer sin correo"),
+            ("Cuentas otros bancos con correo.txt",
+             lambda b: not es_bancomer(b) and tiene_correo(b), "otros bancos con correo"),
+            ("Cuentas otros bancos sin correo.txt",
+             lambda b: not es_bancomer(b) and not tiene_correo(b), "otros bancos sin correo"),
         ]
-        ruta = await self.picker.save_file(
-            dialog_title="Guardar archivo de dispersión TXT (Bancomer)",
-            file_name="dispersion.txt", allowed_extensions=["txt"],
+
+        destino = await self.picker.get_directory_path(
+            dialog_title="Elige dónde crear la carpeta de alta de cuentas Bancomer",
         )
-        if not ruta:
+        if not destino:
             return
-        if not ruta.lower().endswith(".txt"):
-            ruta += ".txt"
+        # El nombre lleva la fecha; en Windows una carpeta no admite '/', así que
+        # se usa dd-mm-aaaa en lugar de dd/mm/aaaa.
+        fecha = date.today().strftime("%d-%m-%Y")
+        carpeta = os.path.join(destino, f"CUENTAS PARA ALTA BANCOMER - {fecha}")
         try:
-            contenido = exportador.generar_txt(registros)
-            with open(ruta, "w", encoding="latin-1", newline="") as fh:
-                fh.write(contenido)
+            os.makedirs(carpeta, exist_ok=True)
+            resumen: list[str] = []
+            for nombre_archivo, filtro, etiqueta in grupos:
+                sub = [
+                    (b.clabe, b.monto, b.beneficiario, b.email or "")
+                    for b in validos if filtro(b)
+                ]
+                if not sub:
+                    continue
+                with open(os.path.join(carpeta, nombre_archivo),
+                          "w", encoding="latin-1", newline="") as fh:
+                    fh.write(exportador_alta_bancomer.generar_txt(sub))
+                resumen.append(f"{len(sub)} {etiqueta}")
         except Exception as exc:  # noqa: BLE001 — se reporta al usuario
-            self.avisar(f"No se pudo guardar el archivo: {exc}", ROJO)
+            self.avisar(f"No se pudo generar la carpeta: {exc}", ROJO)
             return
-        self.avisar(f"TXT generado con {len(registros)} registro(s) guardado(s).", VERDE)
+        try:
+            os.startfile(carpeta)  # abre la carpeta generada en el explorador
+        except Exception:  # noqa: BLE001 — abrir es opcional
+            pass
+        self.avisar("Carpeta de alta generada (" + ", ".join(resumen) + ").", VERDE)
 
     async def _exportar_alta_banregio(self, guardados) -> None:
         registros = [

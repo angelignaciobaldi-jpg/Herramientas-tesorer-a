@@ -9,6 +9,8 @@ venv/
 build/
 dist/
 *.spec
+# Paquete generado para compartir (preparar_paquete.bat)
+Tesoreria-paquete/
 
 # ===== Datos en runtime (se generan/actualizan; no van al repo) =====
 tesoreria.db
@@ -23,6 +25,13 @@ tessdata/
 CARATULAS/
 # Excel con las cuentas bancarias de las empresas
 Cuentas bancarias/
+# Reporte de cuentas para conciliar (CLABE/nombres/correos reales de proveedores)
+Reporte Cuentas Bancarias.xlsx
+Reporte*.xlsx
+# Documentos de prueba (estados de cuenta / cartas reales con datos sensibles)
+Documentos de pruebas conciliación/
+# Páginas HTML de referencia del portal/reportes (datos reales)
+PAGINAS HTML/
 # Archivos TXT de ejemplo (contienen CLABE/nombres reales)
 Archivos TXT/
 ALTABANREGIO 1.xls

@@ -76,7 +76,19 @@ class AppTesoreria:
             vertical_alignment=ft.CrossAxisAlignment.CENTER,
         )
 
-        self.page.add(encabezado, tabs)
+        # Pie de página: crédito fijo abajo, centrado y discreto.
+        pie = ft.Container(
+            content=ft.Text(
+                "Quetzaltic Solutions - 2026",
+                size=12,
+                color=ft.Colors.ON_SURFACE_VARIANT,
+                text_align=ft.TextAlign.CENTER,
+            ),
+            alignment=ft.Alignment(0, 0),
+            padding=6,
+        )
+
+        self.page.add(encabezado, tabs, pie)
         # El redimensionado afecta la tabla de la pantalla de alta.
         self.page.on_resize = self.alta._on_resize
         # Ya con la página construida, se cargan los registros guardados.
