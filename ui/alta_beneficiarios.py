@@ -47,8 +47,10 @@ class FilaBeneficiario:
         #   "sin"    -> no coincide ni por CLABE ni por nombre (fila roja)
         self.conciliacion: str | None = None
 
+        # Sin max_length (evita el contador "X/18" que desalineaba la fila); el
+        # límite de 18 dígitos se mantiene por código en _cambio_clabe.
         self.tf_clabe = ft.TextField(
-            value=clabe, dense=True, width=W_CLABE, max_length=18, text_size=12,
+            value=clabe, dense=True, width=W_CLABE, text_size=12,
             content_padding=8, text_align=ft.TextAlign.CENTER, on_change=self._cambio_clabe,
         )
         self.tf_monto = ft.TextField(
@@ -124,7 +126,11 @@ class FilaBeneficiario:
         )
 
     def _cambio_clabe(self, _e) -> None:
-        self.txt_banco.value = banco_desde_clabe(solo_digitos(self.tf_clabe.value)) or "—"
+        # Limita la CLABE a 18 dígitos (sin max_length, para no mostrar contador).
+        limpio = solo_digitos(self.tf_clabe.value)[:18]
+        if limpio != (self.tf_clabe.value or ""):
+            self.tf_clabe.value = limpio
+        self.txt_banco.value = banco_desde_clabe(limpio) or "—"
         # Si hay un reporte importado, re-concilia esta fila con la nueva CLABE.
         self.seccion._conciliar_una(self)
         self._actualizar_estado()

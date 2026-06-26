@@ -22,9 +22,12 @@ class FilaDevolucion:
 
     def __init__(self, seccion: "SeccionDevoluciones"):
         self.seccion = seccion
+        # Sin max_length (evita el contador "X/18"); el límite de 18 dígitos se
+        # mantiene por código en _limitar_clabe.
         self.tf_clabe = ft.TextField(
-            dense=True, width=W_CLABE, max_length=18, text_size=12,
+            dense=True, width=W_CLABE, text_size=12,
             content_padding=8, text_align=ft.TextAlign.CENTER,
+            on_change=self._limitar_clabe,
         )
         self.tf_monto = ft.TextField(
             dense=True, width=W_MONTO, text_size=12, content_padding=8,
@@ -32,18 +35,12 @@ class FilaDevolucion:
         )
         self.tf_benef = ft.TextField(dense=True, width=W_NOMBRE, text_size=12, content_padding=8)
         self.tf_concepto = ft.TextField(dense=True, width=W_NOMBRE, text_size=12, content_padding=8)
-        # Solo el día de la devolución (1-31). Solo se usa en el reporte Excel.
-        self.tf_dia = ft.TextField(
-            dense=True, width=W_MONTO, max_length=2, text_size=12, content_padding=8,
-            text_align=ft.TextAlign.CENTER, hint_text="día",
-        )
         self.fila = ft.DataRow(
             cells=[
                 ft.DataCell(self.tf_clabe),
                 ft.DataCell(self.tf_monto),
                 ft.DataCell(self.tf_benef),
                 ft.DataCell(self.tf_concepto),
-                ft.DataCell(celda_centrada(self.tf_dia, W_MONTO)),
                 ft.DataCell(celda_centrada(
                     ft.IconButton(
                         icon=ft.Icons.DELETE_OUTLINE, tooltip="Quitar", icon_color=ROJO,
@@ -54,13 +51,20 @@ class FilaDevolucion:
             ]
         )
 
-    def valores(self) -> tuple[str, str, str, str, str]:
+    def _limitar_clabe(self, _e) -> None:
+        """Limita la CLABE a 18 dígitos sin usar max_length (para no mostrar el
+        contador de caracteres que desalineaba la fila)."""
+        limpio = solo_digitos(self.tf_clabe.value)[:18]
+        if limpio != (self.tf_clabe.value or ""):
+            self.tf_clabe.value = limpio
+            self.seccion.page.update()
+
+    def valores(self) -> tuple[str, str, str, str]:
         return (
             solo_digitos(self.tf_clabe.value),
             (self.tf_monto.value or "").strip(),
             (self.tf_benef.value or "").strip(),
             (self.tf_concepto.value or "").strip(),
-            (self.tf_dia.value or "").strip(),
         )
 
 
@@ -141,7 +145,6 @@ class SeccionDevoluciones:
                 ft.DataColumn(label=encabezado_col("Monto", W_MONTO), numeric=True),
                 ft.DataColumn(label=encabezado_col("Beneficiario", W_NOMBRE)),
                 ft.DataColumn(label=encabezado_col("Concepto / Referencia", W_NOMBRE)),
-                ft.DataColumn(label=encabezado_col("Fecha devol. (día)", W_MONTO)),
                 ft.DataColumn(label=encabezado_col("", W_ACCIONES)),
             ],
             rows=[],
@@ -187,9 +190,9 @@ class SeccionDevoluciones:
         self.page.update()
 
     def _cambio_banco(self, _e) -> None:
-        es_banregio = self.dd_banco.value == "Banregio"
-        self.tf_fecha.visible = es_banregio
-        self.tf_folio.visible = not es_banregio
+        # La fecha (de devolución) se usa siempre: en el TXT de Banregio y como
+        # Fecha de devolución del reporte Excel. El folio es solo de Bancomer.
+        self.tf_folio.visible = self.dd_banco.value == "Bancomer"
         self._actualizar_cuentas()
 
     def _actualizar_cuentas(self, _e=None) -> None:
@@ -229,11 +232,11 @@ class SeccionDevoluciones:
     # ------------------------------------------------------- generación
     def _recolectar(self):
         """Valida y devuelve los movimientos como [(clabe, monto, benef,
-        concepto, dia), ...]; o None (tras avisar) si hay un dato inválido."""
+        concepto), ...]; o None (tras avisar) si hay un dato inválido."""
         registros = []
         for fila in self.filas:
-            clabe, monto_txt, benef, concepto, dia = fila.valores()
-            if not (clabe or monto_txt or benef or concepto or dia):
+            clabe, monto_txt, benef, concepto = fila.valores()
+            if not (clabe or monto_txt or benef or concepto):
                 continue  # ignora filas totalmente vacías
             if len(clabe) != 18:
                 self.app.avisar("Hay CLABE(s) que no tienen 18 dígitos.", ROJO)
@@ -246,7 +249,7 @@ class SeccionDevoluciones:
             if monto is None:
                 self.app.avisar("Falta capturar algún monto.", ROJO)
                 return None
-            registros.append((clabe, monto, benef, concepto, dia))
+            registros.append((clabe, monto, benef, concepto))
         # TODO: volver a exigir mínimo 2 movimientos cuando se active el candado.
         if len(registros) < 1:
             self.app.avisar("Captura al menos 1 movimiento válido.", ROJO)
@@ -254,12 +257,14 @@ class SeccionDevoluciones:
         return registros
 
     def _contexto(self) -> dict:
+        # La fecha (de devolución) alimenta tanto el TXT de Banregio como el
+        # reporte Excel; se toma siempre del campo de fecha.
         return {
             "empresa": self.dd_empresa.value or "",
             "banco": self.dd_banco.value or "",
             "cuenta_origen": self.dd_origen.value or "",
             "num_cuenta": self.tf_num_cuenta.value or "",
-            "fecha": (self.tf_fecha.value or "") if self.dd_banco.value == "Banregio" else "",
+            "fecha": self.tf_fecha.value or "",
         }
 
     async def _generar(self, _e) -> None:
@@ -276,8 +281,7 @@ class SeccionDevoluciones:
                 "o revisa el Excel de cuentas.", ROJO)
             return
 
-        # El TXT no incluye el día de devolución (solo es para el Excel).
-        movimientos = [(c, m, b, co) for c, m, b, co, _dia in registros]
+        movimientos = registros  # (clabe, monto, beneficiario, concepto)
         banco = self.dd_banco.value
         if banco == "Banregio":
             fecha = solo_digitos(self.tf_fecha.value)

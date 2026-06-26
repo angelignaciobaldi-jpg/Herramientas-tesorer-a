@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 import openpyxl
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 
@@ -10,14 +12,21 @@ _GRIS = "D9D9D9"
 _BORDE = Border(*(Side(style="thin", color="BFBFBF"),) * 4)
 
 
+def _fmt_fecha(fecha: str) -> str:
+    """Convierte DDMMAAAA -> dd/mm/aaaa. Si no son 8 dígitos, la deja igual."""
+    s = re.sub(r"\D", "", fecha or "")
+    return f"{s[0:2]}/{s[2:4]}/{s[4:8]}" if len(s) == 8 else (fecha or "")
+
+
 def generar(ruta: str, contexto: dict, registros: list[tuple]) -> None:
     """Crea el archivo Excel.
 
     Args:
         ruta: ruta destino .xlsx
         contexto: {empresa, banco, cuenta_origen, num_cuenta, fecha}
-        registros: lista de (clabe, monto, beneficiario, concepto, dia)
+        registros: lista de (clabe, monto, beneficiario, concepto)
     """
+    fecha_devol = _fmt_fecha(contexto.get("fecha", ""))
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "Devoluciones"
@@ -30,7 +39,7 @@ def generar(ruta: str, contexto: dict, registros: list[tuple]) -> None:
         ("Banco:", contexto.get("banco", "")),
         ("Cuenta origen (CLABE):", contexto.get("cuenta_origen", "")),
         ("Número de cuenta:", contexto.get("num_cuenta", "")),
-        ("Fecha:", contexto.get("fecha", "")),
+        ("Fecha:", fecha_devol),
     ]
     fila = 3
     for etiqueta, valor in info:
@@ -41,7 +50,7 @@ def generar(ruta: str, contexto: dict, registros: list[tuple]) -> None:
     # --- Tabla de movimientos ---
     fila += 1
     encabezados = ["#", "CLABE", "Monto", "Beneficiario",
-                   "Concepto / Referencia", "Fecha de devolución (día)"]
+                   "Concepto / Referencia", "Fecha de devolución"]
     for col, titulo in enumerate(encabezados, start=1):
         c = ws.cell(row=fila, column=col, value=titulo)
         c.font = Font(bold=True, color="FFFFFF")
@@ -50,8 +59,8 @@ def generar(ruta: str, contexto: dict, registros: list[tuple]) -> None:
         c.border = _BORDE
 
     fila_inicio = fila + 1
-    for i, (clabe, monto, beneficiario, concepto, dia) in enumerate(registros, start=1):
-        valores = [i, clabe, float(monto or 0), beneficiario, concepto, dia]
+    for i, (clabe, monto, beneficiario, concepto) in enumerate(registros, start=1):
+        valores = [i, clabe, float(monto or 0), beneficiario, concepto, fecha_devol]
         for col, valor in enumerate(valores, start=1):
             c = ws.cell(row=fila_inicio + i - 1, column=col, value=valor)
             c.border = _BORDE
