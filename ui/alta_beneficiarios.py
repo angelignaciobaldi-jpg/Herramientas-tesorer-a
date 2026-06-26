@@ -850,6 +850,11 @@ class SeccionAltaBeneficiarios:
                           "w", encoding="latin-1", newline="") as fh:
                     fh.write(exportador_alta_bancomer.generar_txt(sub))
                 resumen.append(f"{len(sub)} {etiqueta}")
+        except PermissionError:
+            self.avisar(
+                "No se pudo guardar: algún archivo de la carpeta está abierto. "
+                "Ciérralo e intenta de nuevo.", ROJO)
+            return
         except Exception as exc:  # noqa: BLE001 — se reporta al usuario
             self.avisar(f"No se pudo generar la carpeta: {exc}", ROJO)
             return
@@ -878,6 +883,11 @@ class SeccionAltaBeneficiarios:
             ruta += ".xls"
         try:
             exportador_alta_banregio.generar(ruta, registros)
+        except PermissionError:
+            self.avisar(
+                "No se pudo guardar: el archivo está abierto en Excel. Ciérralo e "
+                "intenta de nuevo (o guarda con otro nombre).", ROJO)
+            return
         except Exception as exc:  # noqa: BLE001 — se reporta al usuario
             self.avisar(f"No se pudo guardar el archivo: {exc}", ROJO)
             return

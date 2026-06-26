@@ -314,6 +314,11 @@ class SeccionDevoluciones:
         try:
             with open(ruta, "w", encoding="latin-1", newline="") as fh:
                 fh.write(contenido)
+        except PermissionError:
+            self.app.avisar(
+                "No se pudo guardar: el archivo está abierto en otro programa. "
+                "Ciérralo e intenta de nuevo (o guarda con otro nombre).", ROJO)
+            return
         except Exception as exc:  # noqa: BLE001 — se reporta al usuario
             self.app.avisar(f"No se pudo guardar el archivo: {exc}", ROJO)
             return
@@ -333,6 +338,11 @@ class SeccionDevoluciones:
             ruta += ".xlsx"
         try:
             reporte_excel.generar(ruta, self._contexto(), registros)
+        except PermissionError:
+            self.app.avisar(
+                "No se pudo guardar: el archivo está abierto en Excel. Ciérralo e "
+                "intenta de nuevo (o guarda con otro nombre).", ROJO)
+            return
         except Exception as exc:  # noqa: BLE001 — se reporta al usuario
             self.app.avisar(f"No se pudo generar el Excel: {exc}", ROJO)
             return
