@@ -107,9 +107,12 @@ class SeccionDevoluciones:
         )
         # Config Banregio (solo fecha) / Bancomer (solo folio). Van en la misma
         # fila que la cuenta origen; se muestra uno u otro según el banco.
+        # Sin max_length (evita el contador "8/8" que desalineaba la fila); el
+        # límite de 8 dígitos se mantiene por código en _limitar_fecha.
         self.tf_fecha = ft.TextField(
-            label="Fecha (DDMMAAAA)", width=170, max_length=8,
+            label="Fecha (DDMMAAAA)", width=170,
             value=date.today().strftime("%d%m%Y"),
+            on_change=self._limitar_fecha,
         )
         self.tf_folio = ft.TextField(label="Folio", width=150, value="0023626H", visible=False)
 
@@ -169,6 +172,14 @@ class SeccionDevoluciones:
             ),
         )
         return ft.Column([config, tabla], spacing=14, scroll=ft.ScrollMode.AUTO, expand=True)
+
+    def _limitar_fecha(self, _e) -> None:
+        """Mantiene la fecha en máximo 8 dígitos (DDMMAAAA) sin usar max_length,
+        para no mostrar el contador de caracteres que desalineaba la fila."""
+        limpio = solo_digitos(self.tf_fecha.value)[:8]
+        if limpio != (self.tf_fecha.value or ""):
+            self.tf_fecha.value = limpio
+            self.page.update()
 
     def _cambio_banco(self, _e) -> None:
         es_banregio = self.dd_banco.value == "Banregio"
