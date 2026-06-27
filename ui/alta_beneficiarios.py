@@ -414,22 +414,36 @@ class SeccionAltaBeneficiarios:
 
     def _construir_rpa(self) -> ft.Control:
         """Tarjeta del RPA: descarga los anexos del SIPP por rango de fechas."""
+        # Selectores de fecha tipo calendario (DatePicker). El campo es de solo
+        # lectura y abre el calendario al hacer clic; el RPA lee su texto.
+        self.dp_ini = ft.DatePicker(
+            first_date=date(2020, 1, 1), last_date=date(2035, 12, 31),
+            help_text="Fecha inicio de la consulta",
+            on_change=lambda e: self._fecha_elegida(self.tf_rpa_ini, self.dp_ini),
+        )
+        self.dp_fin = ft.DatePicker(
+            first_date=date(2020, 1, 1), last_date=date(2035, 12, 31),
+            help_text="Fecha fin de la consulta",
+            on_change=lambda e: self._fecha_elegida(self.tf_rpa_fin, self.dp_fin),
+        )
         self.tf_rpa_ini = ft.TextField(
             label="Fecha inicio consulta", hint_text="DD/MM/AAAA", width=210,
-            on_change=lambda e: self._limitar_fecha_rpa(self.tf_rpa_ini),
+            read_only=True, suffix_icon=ft.Icons.CALENDAR_MONTH,
+            on_click=lambda e: self.page.show_dialog(self.dp_ini),
         )
         self.tf_rpa_fin = ft.TextField(
             label="Fecha fin consulta", hint_text="DD/MM/AAAA", width=210,
-            on_change=lambda e: self._limitar_fecha_rpa(self.tf_rpa_fin),
+            read_only=True, suffix_icon=ft.Icons.CALENDAR_MONTH,
+            on_click=lambda e: self.page.show_dialog(self.dp_fin),
         )
         self.btn_rpa = ft.FilledButton(
-            content="Iniciar RPA (descargar anexos)", icon=ft.Icons.SMART_TOY_OUTLINED,
+            content="Iniciar descarga", icon=ft.Icons.SMART_TOY_OUTLINED,
             on_click=self._iniciar_rpa_anexos,
         )
         self.anillo_rpa = ft.ProgressRing(width=18, height=18, stroke_width=2, visible=False)
         self.txt_rpa = ft.Text("", color=GRIS, size=12)
         return tarjeta(
-            "Descargar anexos del SIPP (RPA)",
+            "Descargar anexos del SIPP",
             ft.Column(
                 [
                     ft.Row(
@@ -449,16 +463,10 @@ class SeccionAltaBeneficiarios:
             ),
         )
 
-    def _limitar_fecha_rpa(self, campo: ft.TextField) -> None:
-        """Limita la fecha a 8 dígitos y la formatea como DD/MM/AAAA al vuelo."""
-        d = solo_digitos(campo.value)[:8]
-        formateado = d
-        if len(d) > 4:
-            formateado = f"{d[:2]}/{d[2:4]}/{d[4:]}"
-        elif len(d) > 2:
-            formateado = f"{d[:2]}/{d[2:]}"
-        if formateado != (campo.value or ""):
-            campo.value = formateado
+    def _fecha_elegida(self, campo: ft.TextField, dp: ft.DatePicker) -> None:
+        """Vuelca la fecha elegida en el calendario al campo, como DD/MM/AAAA."""
+        if dp.value:
+            campo.value = dp.value.strftime("%d/%m/%Y")
             self.page.update()
 
     async def _iniciar_rpa_anexos(self, _e) -> None:
