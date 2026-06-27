@@ -55,7 +55,8 @@ def _leer_excel(ruta: str) -> dict[str, dict[str, list[list[str]]]]:
         wb = openpyxl.load_workbook(ruta, data_only=True, read_only=True)
     except Exception:
         return catalogo  # p. ej. PermissionError si está abierto en Excel
-    ws = wb[wb.sheetnames[0]]
+    nombre_hoja = "RESUMEN DE CUENTAS" if "RESUMEN DE CUENTAS" in wb.sheetnames else wb.sheetnames[0]
+    ws = wb[nombre_hoja]
     for fila in ws.iter_rows(min_row=2, values_only=True):
         if not fila:
             continue
