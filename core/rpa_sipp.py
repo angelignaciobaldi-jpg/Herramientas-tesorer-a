@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import os
 import re
 import threading
 
@@ -54,6 +55,7 @@ class SesionSipp:
     URL_LOGIN = BASE_URL + "/"
     URL_CONFIG_SESION = BASE_URL + "/index.cfm#/configuracionsession"
     URL_DASHBOARD_TESOR = BASE_URL + "/#/DashboardTesor"
+    URL_REPORTE_CUENTAS = BASE_URL + "/index.cfm#/ProveedoresCuentasBancariasReporte"
 
     # --- Tiempos de espera (ms) ---
     TIMEOUT_NAV = 30_000        # navegación / carga de página
@@ -310,6 +312,122 @@ class SesionSipp:
                 "No apareció la opción '%s' en el menú '%s'." % (opcion, menu)
             ) from exc
         await opcion_loc.first.click()
+
+    # --------------------------- reporte de cuentas bancarias (anexos)
+    async def ir_a_reporte_cuentas_bancarias(self) -> None:
+        """Navega a 'Proveedores > Cuentas Bancarias > Reporte' y espera a que
+        cargue el filtro de tipo de beneficiario."""
+        page = self._exigir_pagina()
+        await page.goto(
+            self.URL_REPORTE_CUENTAS, wait_until="domcontentloaded", timeout=self.TIMEOUT_NAV,
+        )
+        try:
+            await page.locator("#id_TipoReporte_chosen").wait_for(
+                state="visible", timeout=self.TIMEOUT_ELEMENTO,
+            )
+        except PlaywrightTimeoutError as exc:
+            raise ErrorSipp(
+                "No se cargó la pantalla 'Reporte de Cuentas Bancarias' "
+                "(no apareció el filtro de tipo de beneficiario)."
+            ) from exc
+
+    async def filtrar_reporte_cuentas_bancarias(
+        self, tipo_beneficiario: str, fecha_inicio: str, fecha_fin: str,
+    ) -> None:
+        """En el reporte, elige el tipo de beneficiario (select 'chosen'
+        múltiple), captura el rango de fechas y aplica el filtro (lupa)."""
+        page = self._exigir_pagina()
+
+        # 1) Tipo de beneficiario (chosen múltiple: #id_TipoReporte_chosen).
+        cont = page.locator("#id_TipoReporte_chosen")
+        await cont.scroll_into_view_if_needed()
+        await cont.click()
+        buscador = cont.locator("input.chosen-search-input").first
+        try:
+            await buscador.fill(tipo_beneficiario, timeout=2_000)
+        except PlaywrightTimeoutError:
+            pass
+        opcion = cont.locator(
+            ".chosen-results li.active-result", has_text=tipo_beneficiario,
+        ).first
+        try:
+            await opcion.click(timeout=self.TIMEOUT_ELEMENTO)
+        except PlaywrightTimeoutError as exc:
+            raise ErrorSipp(
+                "No se encontró la opción '%s' en el tipo de beneficiario." % tipo_beneficiario
+            ) from exc
+
+        # 2) Rango de fechas (campos con máscara dd/MM/yyyy).
+        await self._llenar_fecha("#fh_inicial", fecha_inicio)
+        await self._llenar_fecha("#fh_fin", fecha_fin)
+
+        # 3) Aplicar el filtro (ícono de lupa).
+        await page.locator("#lupa").click()
+        # La grid recarga por AJAX; se da un respiro para que pinten los datos.
+        await page.wait_for_timeout(2_000)
+
+    async def _llenar_fecha(self, selector: str, valor: str) -> None:
+        """Captura una fecha en un campo con máscara dd/MM/yyyy. Recibe la fecha
+        en cualquier forma (DD/MM/AAAA o DDMMAAAA): teclea solo los 8 dígitos y
+        la máscara agrega las diagonales. Cierra el calendario emergente."""
+        page = self._exigir_pagina()
+        digitos = re.sub(r"\D", "", valor or "")[:8]
+        campo = page.locator(selector)
+        await campo.click()
+        await page.keyboard.press("Control+A")
+        await page.keyboard.press("Delete")
+        await campo.type(digitos, delay=30)
+        await page.keyboard.press("Escape")  # cierra el datepicker si se abrió
+
+    async def descargar_anexos(self, carpeta_destino: str) -> int:
+        """Descarga los archivos anexos de los registros mostrados en la grid.
+
+        Cada fila con archivo tiene un botón 'Ver archivo' (ver-archivo
+        > button.blue-sip); las filas sin archivo lo traen oculto (ng-hide).
+        Devuelve cuántos archivos se descargaron.
+
+        Nota: la grid (ngGrid) virtualiza filas; esta primera versión descarga
+        las visibles tras el filtro. El manejo de scroll/paginación se afina
+        tras una corrida de verificación contra el portal real.
+        """
+        page = self._exigir_pagina()
+        os.makedirs(carpeta_destino, exist_ok=True)
+        botones = page.locator("ver-archivo:not(.ng-hide) button.blue-sip")
+        total = await botones.count()
+        descargados = 0
+        for i in range(total):
+            boton = botones.nth(i)
+            try:
+                if not await boton.is_visible():
+                    continue
+                async with page.expect_download(timeout=self.TIMEOUT_NAV) as info:
+                    await boton.click()
+                descarga = await info.value
+                destino = os.path.join(
+                    carpeta_destino, descarga.suggested_filename or f"anexo_{i + 1}",
+                )
+                await descarga.save_as(destino)
+                descargados += 1
+            except PlaywrightTimeoutError:
+                # 'abrirFile' pudo abrir el archivo en una pestaña nueva en lugar
+                # de descargarlo; se cierra esa pestaña para no acumularlas.
+                for extra in list(self.context.pages)[1:]:
+                    try:
+                        await extra.close()
+                    except Exception:  # noqa: BLE001
+                        pass
+        return descargados
+
+    async def descargar_anexos_proveedores(
+        self, fecha_inicio: str, fecha_fin: str, carpeta_destino: str,
+        tipo_beneficiario: str = "Proveedores",
+    ) -> int:
+        """Flujo completo (asumiendo sesión ya iniciada y empresa/sucursal
+        seleccionadas): abre el reporte, filtra por tipo de beneficiario y rango
+        de fechas, y descarga todos los anexos. Devuelve cuántos descargó."""
+        await self.ir_a_reporte_cuentas_bancarias()
+        await self.filtrar_reporte_cuentas_bancarias(tipo_beneficiario, fecha_inicio, fecha_fin)
+        return await self.descargar_anexos(carpeta_destino)
 
     # --------------------------------------------------------- utilidades
     async def _primer_visible(
