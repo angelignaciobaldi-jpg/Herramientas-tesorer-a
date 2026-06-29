@@ -18,6 +18,7 @@ from core import (
 )
 from core.catalogo_bancos import banco_desde_clabe
 from core.extractores import extraer_clabes, extraer_datos, nombre_desde_archivo, validar_clabe
+from core.rpa_sipp import BucleRpa, ErrorSipp, SesionSipp
 from ui.comun import (
     EXTENSIONES, GRIS, NARANJA, ROJO, VERDE,
     W_ACCIONES, W_BANCO, W_CLABE, W_ESTADO, W_MONTO, W_NOMBRE,
@@ -241,6 +242,10 @@ class SeccionAltaBeneficiarios:
     """Pantalla de alta de beneficiarios. Recibe el 'shell' de la app (que
     expone page, picker y avisar)."""
 
+    # Empresa y sucursal del SIPP donde el RPA descarga los anexos.
+    RPA_EMPRESA = "ASKE"
+    RPA_SUCURSAL = "Corporativo"
+
     def __init__(self, app):
         self.app = app
         self.page = app.page
@@ -249,6 +254,9 @@ class SeccionAltaBeneficiarios:
         # Reporte de cuentas importado (para conciliar). Vacío = no se subió.
         self.catalogo_reporte: dict[str, reporte_cuentas.CuentaReporte] = {}
         self.nombre_reporte = ""
+        # RPA del SIPP (descarga de anexos). Se crean al primer uso.
+        self.sesion_rpa: SesionSipp | None = None
+        self.bucle_rpa: BucleRpa | None = None
         self.contenido = self._construir()
 
     def avisar(self, mensaje: str, color: str | None = None) -> None:
@@ -309,6 +317,8 @@ class SeccionAltaBeneficiarios:
                 spacing=8,
             ),
         )
+
+        seccion_rpa = self._construir_rpa()
 
         # --- Sección 2: tabla editable con todos los registros ---
         self.enc_benef = encabezado_col("Beneficiario", W_NOMBRE)
@@ -396,11 +406,142 @@ class SeccionAltaBeneficiarios:
         )
 
         return ft.Column(
-            [seccion_carga, seccion_tabla],
+            [seccion_carga, seccion_rpa, seccion_tabla],
             spacing=14,
             scroll=ft.ScrollMode.AUTO,
             expand=True,
         )
+
+    def _construir_rpa(self) -> ft.Control:
+        """Tarjeta del RPA: descarga los anexos del SIPP por rango de fechas."""
+        # Selectores de fecha tipo calendario (DatePicker). El campo es de solo
+        # lectura y abre el calendario al hacer clic; el RPA lee su texto.
+        self.dp_ini = ft.DatePicker(
+            first_date=date(2020, 1, 1), last_date=date(2035, 12, 31),
+            help_text="Fecha inicio de la consulta",
+            on_change=lambda e: self._fecha_elegida(self.tf_rpa_ini, self.dp_ini),
+        )
+        self.dp_fin = ft.DatePicker(
+            first_date=date(2020, 1, 1), last_date=date(2035, 12, 31),
+            help_text="Fecha fin de la consulta",
+            on_change=lambda e: self._fecha_elegida(self.tf_rpa_fin, self.dp_fin),
+        )
+        self.tf_rpa_ini = ft.TextField(
+            label="Fecha inicio consulta", hint_text="DD/MM/AAAA", width=210,
+            read_only=True, suffix_icon=ft.Icons.CALENDAR_MONTH,
+            on_click=lambda e: self.page.show_dialog(self.dp_ini),
+        )
+        self.tf_rpa_fin = ft.TextField(
+            label="Fecha fin consulta", hint_text="DD/MM/AAAA", width=210,
+            read_only=True, suffix_icon=ft.Icons.CALENDAR_MONTH,
+            on_click=lambda e: self.page.show_dialog(self.dp_fin),
+        )
+        self.btn_rpa = ft.FilledButton(
+            content="Iniciar descarga", icon=ft.Icons.SMART_TOY_OUTLINED,
+            on_click=self._iniciar_rpa_anexos,
+        )
+        self.anillo_rpa = ft.ProgressRing(width=18, height=18, stroke_width=2, visible=False)
+        self.txt_rpa = ft.Text("", color=GRIS, size=12)
+        return tarjeta(
+            "Descargar anexos del SIPP",
+            ft.Column(
+                [
+                    ft.Row(
+                        [self.tf_rpa_ini, self.tf_rpa_fin, self.btn_rpa, self.anillo_rpa],
+                        spacing=12, wrap=True,
+                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                    ),
+                    ft.Text(
+                        f"Entra al SIPP con las credenciales de Configuración, empresa "
+                        f"{self.RPA_EMPRESA} / sucursal {self.RPA_SUCURSAL}, filtra "
+                        "Proveedores por el rango de fechas y descarga los anexos.",
+                        color=GRIS, size=12, italic=True,
+                    ),
+                    self.txt_rpa,
+                ],
+                spacing=8,
+            ),
+        )
+
+    def _fecha_elegida(self, campo: ft.TextField, dp: ft.DatePicker) -> None:
+        """Vuelca la fecha elegida en el calendario al campo, como DD/MM/AAAA."""
+        if dp.value:
+            campo.value = dp.value.strftime("%d/%m/%Y")
+            self.page.update()
+
+    async def _iniciar_rpa_anexos(self, _e) -> None:
+        """Lanza el RPA: login en el SIPP, filtra Proveedores por el rango de
+        fechas y descarga los anexos en la carpeta que elija el usuario."""
+        usuario, contrasena = self.app.config.credenciales()
+        if not usuario or not contrasena:
+            self.avisar("Captura usuario y contraseña en Configuración (ícono ⚙).", ROJO)
+            return
+        fi = solo_digitos(self.tf_rpa_ini.value)
+        ff = solo_digitos(self.tf_rpa_fin.value)
+        if len(fi) != 8 or len(ff) != 8:
+            self.avisar("Captura fecha inicio y fecha fin (DD/MM/AAAA).", ROJO)
+            return
+        carpeta = await self.picker.get_directory_path(
+            dialog_title="Carpeta donde guardar los anexos descargados",
+        )
+        if not carpeta:
+            return
+
+        await self._cerrar_sesion_rpa()  # cierra una corrida previa si la hubiera
+        self.btn_rpa.disabled = True
+        self.anillo_rpa.visible = True
+        self.txt_rpa.value = "RPA: iniciando sesión en el SIPP…"
+        self.page.update()
+        try:
+            n = await self._correr_rpa_anexos(usuario, contrasena, fi, ff, carpeta)
+        except ErrorSipp as exc:
+            await self._cerrar_sesion_rpa()
+            self._fin_rpa(f"RPA: {exc}", ROJO)
+            return
+        except Exception as exc:  # noqa: BLE001 — se reporta al usuario
+            await self._cerrar_sesion_rpa()
+            self._fin_rpa(f"RPA: error inesperado: {exc}", ROJO)
+            return
+        self._fin_rpa(
+            f"RPA: {n} anexo(s) descargado(s) en la carpeta elegida.",
+            VERDE if n else NARANJA,
+        )
+
+    async def _correr_rpa_anexos(self, usuario, contrasena, fi, ff, carpeta) -> int:
+        """Ejecuta todo el flujo del RPA en el bucle del hilo dedicado (Playwright
+        requiere que todo corra en el mismo loop)."""
+        if self.bucle_rpa is None:
+            self.bucle_rpa = BucleRpa()
+        self.sesion_rpa = SesionSipp(headless=False)
+        sesion = self.sesion_rpa
+
+        async def flujo() -> int:
+            await sesion.iniciar()
+            await sesion.login(usuario, contrasena)
+            await sesion.seleccionar_empresa_sucursal(self.RPA_EMPRESA, self.RPA_SUCURSAL)
+            return await sesion.descargar_anexos_proveedores(fi, ff, carpeta)
+
+        return await asyncio.wrap_future(self.bucle_rpa.enviar(flujo()))
+
+    async def _cerrar_sesion_rpa(self) -> None:
+        """Cierra el navegador del RPA si quedó abierto (best-effort)."""
+        if self.sesion_rpa is None:
+            return
+        sesion = self.sesion_rpa
+        self.sesion_rpa = None
+        try:
+            if self.bucle_rpa is not None:
+                await asyncio.wrap_future(self.bucle_rpa.enviar(sesion.cerrar()))
+        except Exception:  # noqa: BLE001 — el cierre no debe propagar errores
+            pass
+
+    def _fin_rpa(self, mensaje: str, color: str) -> None:
+        """Restablece los controles del RPA y muestra el resultado."""
+        self.btn_rpa.disabled = False
+        self.anillo_rpa.visible = False
+        self.txt_rpa.value = mensaje
+        self.page.update()
+        self.avisar(mensaje, color)
 
     def _leyenda(self) -> ft.Control:
         """Leyenda de los íconos de la columna Estado (mismos íconos/colores

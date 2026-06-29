@@ -17,10 +17,12 @@ import flet as ft
 
 from core import db, ocr, rutas
 from ui.alta_beneficiarios import SeccionAltaBeneficiarios
+from ui.configuracion import SeccionConfiguracion
 from ui.devoluciones import SeccionDevoluciones
+from ui.dispersion_no_pemex import SeccionDispersionNoPemex
 
 
-class AppTesoreria:
+class AppTesoreria: 
     """Shell de la aplicación: ventana, encabezado, tema y pestañas."""
 
     def __init__(self, page: ft.Page):
@@ -37,11 +39,13 @@ class AppTesoreria:
 
     def _construir(self) -> None:
         # Cada pantalla construye su propio contenido.
+        self.config = SeccionConfiguracion(self)
         self.alta = SeccionAltaBeneficiarios(self)
         self.devoluciones = SeccionDevoluciones(self)
+        self.dispersion_no_pemex = SeccionDispersionNoPemex(self)
 
         tabs = ft.Tabs(
-            length=2,
+            length=3,
             expand=True,
             content=ft.Column(
                 [
@@ -50,10 +54,11 @@ class AppTesoreria:
                             ft.Tab(label="Alta de beneficiarios", icon=ft.Icons.ACCOUNT_BALANCE),
                             ft.Tab(label="Generar dispersión devoluciones",
                                    icon=ft.Icons.CURRENCY_EXCHANGE),
+                            ft.Tab(label="Dispersión (No Pemex)", icon=ft.Icons.PAYMENTS),
                         ]
                     ),
                     ft.TabBarView(
-                        controls=[self.alta.contenido, self.devoluciones.contenido],
+                        controls=[self.alta.contenido, self.devoluciones.contenido, self.dispersion_no_pemex.contenido],
                         expand=True,
                     ),
                 ],
@@ -67,11 +72,14 @@ class AppTesoreria:
             height=58, fit=ft.BoxFit.CONTAIN,
             error_content=ft.Text("Quetzaltic Solutions", weight=ft.FontWeight.BOLD, size=20),
         )
+        self.btn_config = ft.IconButton(
+            icon=ft.Icons.SETTINGS, tooltip="Configuración", on_click=self.config.abrir,
+        )
         self.btn_tema = ft.IconButton(
             icon=ft.Icons.DARK_MODE, tooltip="Modo oscuro", on_click=self._alternar_tema,
         )
         encabezado = ft.Row(
-            [self.logo, self.btn_tema],
+            [self.logo, ft.Row([self.btn_config, self.btn_tema])],
             alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
             vertical_alignment=ft.CrossAxisAlignment.CENTER,
         )
