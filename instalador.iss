@@ -3,11 +3,11 @@
 ; instalador descargado por el AutoUpdater actualice EN SITIO (sobrescribe) en
 ; vez de instalar una copia paralela. No lo cambies entre versiones.
 AppId={{7E9F2A14-3C5B-4D88-9E21-6B0F4A2C1D33}
-AppName=Herramientas de Tesoreria
+AppName=Herramientas Tesoreria
 ; Mantener en sync con core/version.py (__version__).
-AppVersion=0.5.0
+AppVersion=0.5.1
 AppPublisher=Quetzaltic Solutions
-DefaultDirName={commonpf}\Quetzaltic Solutions\Herramientas de Tesoreria
+DefaultDirName={commonpf}\Quetzaltic Solutions\Herramientas Tesoreria
 DefaultGroupName=Quetzaltic Solutions
 OutputDir=.\Output
 ; Debe coincidir con el asset que busca el AutoUpdater (NOMBRE_ASSET):
@@ -25,9 +25,9 @@ PrivilegesRequired=admin
 Source: ".\dist\Tesoreria\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
-Name: "{group}\Herramientas de Tesoreria"; Filename: "{app}\Tesoreria.exe"
-Name: "{commondesktop}\Herramientas de Tesoreria"; Filename: "{app}\Tesoreria.exe"
+Name: "{group}\Herramientas Tesoreria"; Filename: "{app}\Tesoreria.exe"
+Name: "{commondesktop}\Herramientas Tesoreria"; Filename: "{app}\Tesoreria.exe"
 
 [Run]
 ; Ejecuta la app al terminar la instalacion (no en modo silencioso/actualizacion).
-Filename: "{app}\Tesoreria.exe"; Description: "{cm:LaunchProgram,Herramientas de Tesoreria}"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\Tesoreria.exe"; Description: "{cm:LaunchProgram,Herramientas Tesoreria}"; Flags: nowait postinstall skipifsilent
